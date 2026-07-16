@@ -1,0 +1,1 @@
+{"version":"0.2.0","configurations":[{"name":"Messaging Server Manager","type":"coreclr","request":"launch","preLaunchTask":"Build","program":"${workspaceFolder}/src/MessagingServerManager.App/bin/Debug/net8.0-windows/MessagingServerManager.App.exe","cwd":"${workspaceFolder}"}]}

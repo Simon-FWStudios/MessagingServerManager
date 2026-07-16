@@ -1,0 +1,2 @@
+# Example only. Verify flags against your installed TIBCO RV version.
+-service 7500 -http 7580

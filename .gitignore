@@ -1,0 +1,16 @@
+bin/
+obj/
+.vs/
+TestResults/
+coverage/
+tmp/
+*.user
+*.suo
+servers.json
+runtime.json
+settings.json
+logs/
+generated-config/
+*.pfx
+*.pem
+*.key
