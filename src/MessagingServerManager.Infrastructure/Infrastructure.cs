@@ -25,8 +25,15 @@ public sealed class JsonConfigurationStore : IConfigurationStore
     {
         var path = _paths.Resolve(fileName);
         if (!File.Exists(path)) return fallback;
-        try { await using var stream = File.OpenRead(path); return await JsonSerializer.DeserializeAsync<T>(stream, Options, cancellationToken) ?? fallback; }
-        catch (JsonException) { return fallback; }
+        var loaded = await TryLoadAsync<T>(path, cancellationToken);
+        if (loaded.Success) return loaded.Value!;
+        var backup = path + ".bak";
+        if (File.Exists(backup))
+        {
+            loaded = await TryLoadAsync<T>(backup, cancellationToken);
+            if (loaded.Success) return loaded.Value!;
+        }
+        return fallback;
     }
     public async Task SaveAsync<T>(string fileName, T value, CancellationToken cancellationToken = default)
     {
@@ -35,6 +42,44 @@ public sealed class JsonConfigurationStore : IConfigurationStore
         await using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
         { await JsonSerializer.SerializeAsync(stream, value, Options, cancellationToken); await stream.FlushAsync(cancellationToken); }
         if (File.Exists(path)) File.Replace(temp, path, backup, true); else File.Move(temp, path);
+    }
+    private static async Task<(bool Success, T? Value)> TryLoadAsync<T>(string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
+            var value = await JsonSerializer.DeserializeAsync<T>(stream, Options, cancellationToken);
+            return value is null ? (false, default) : (true, value);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) { return (false, default); }
+    }
+}
+
+public sealed class ConfigurationTransferService
+{
+    private static readonly JsonSerializerOptions Options = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
+    public async Task ExportAsync(string path, PortableConfigurationBundle bundle, CancellationToken cancellationToken = default)
+    {
+        var fullPath = Path.GetFullPath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        var temporary = fullPath + ".tmp";
+        await using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
+        {
+            await JsonSerializer.SerializeAsync(stream, bundle, Options, cancellationToken);
+            await stream.FlushAsync(cancellationToken);
+        }
+        File.Move(temporary, fullPath, true);
+    }
+
+    public async Task<PortableConfigurationBundle> ImportAsync(string path, CancellationToken cancellationToken = default)
+    {
+        await using var stream = new FileStream(Path.GetFullPath(path), FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
+        var bundle = await JsonSerializer.DeserializeAsync<PortableConfigurationBundle>(stream, Options, cancellationToken)
+            ?? throw new InvalidDataException("The selected file does not contain a configuration bundle.");
+        if (bundle.SchemaVersion != 1) throw new InvalidDataException($"Unsupported configuration schema version {bundle.SchemaVersion}.");
+        bundle.Settings ??= new GlobalSettings();
+        bundle.Servers ??= [];
+        return bundle;
     }
 }
 
@@ -55,7 +100,16 @@ public sealed class ProcessIdentity
     }
     public static bool ExecutableMatches(Process process, string executable)
     {
-        try { var actual = process.MainModule?.FileName; return actual is not null && string.Equals(Path.GetFileName(actual), Path.GetFileName(executable), StringComparison.OrdinalIgnoreCase); } catch { return false; }
+        try
+        {
+            var actual = process.MainModule?.FileName;
+            if (actual is null) return false;
+            var expanded = Environment.ExpandEnvironmentVariables(executable);
+            return Path.IsPathRooted(expanded)
+                ? string.Equals(Path.GetFullPath(actual), Path.GetFullPath(expanded), StringComparison.OrdinalIgnoreCase)
+                : string.Equals(Path.GetFileName(actual), Path.GetFileName(expanded), StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 }
 

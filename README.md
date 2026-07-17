@@ -15,6 +15,13 @@ dotnet test .
 dotnet run --project src/MessagingServerManager.App
 ```
 
+Real NATS integration tests are in `tests/MessagingServerManager.Nats.IntegrationTests`. They use `NATS_SERVER_PATH` when set, otherwise they discover an ignored local copy under `tools/nats-server`. Tests are dynamically skipped when no executable is available:
+
+```powershell
+$env:NATS_SERVER_PATH = "C:\path\to\nats-server.exe"
+dotnet test tests/MessagingServerManager.Nats.IntegrationTests
+```
+
 VS Code tasks for restore, build, test, and run are included. C# Dev Kit and C# are recommended.
 
 ## Configuration
@@ -23,11 +30,13 @@ Persistent data is stored under `%LOCALAPPDATA%\MessagingServerManager`:
 
 - `servers.json`: server definitions
 - `settings.json`: global settings
-- `runtime.json`: reserved runtime process identity state
+- `runtime.json`: validated runtime process identity, exit history, and restart counters
 - `logs`: default log root
 - `sample-config`: first-run samples
 
-Files use versioned, indented JSON. Saves are atomic and retain the previous valid file as a `.bak`. Environment variables are expanded; relative paths resolve against the configuration directory. Generated runtime JSON, logs, credentials, private keys, and product configuration containing secrets should never be committed.
+Files use versioned, indented JSON. Saves are atomic, retain the previous valid file as a `.bak`, and recover from that backup when the primary JSON is invalid. Environment variables are expanded; relative paths resolve against the configuration directory. Generated runtime JSON, logs, credentials, private keys, and product configuration containing secrets should never be committed.
+
+The toolbar **Load** and **Save / Export** actions transfer a portable, versioned JSON bundle containing global settings and server definitions. Exported bundles deliberately exclude live process state and log contents. Import validates the complete bundle, requires all managed servers to be stopped, asks before replacing the current configuration, and persists the imported settings and definitions only after validation succeeds.
 
 ## Adding servers
 
@@ -37,12 +46,12 @@ Select **Add Server**, choose the product and launch mode, and complete the comm
 
 ## Monitoring and logs
 
-The monitor refreshes every three seconds by default, sampling process identity, PID, start time, uptime, working set, CPU delta, health, exit code, errors, and last-check time. Stored PIDs are never trusted alone: start time and executable identity must also match. Network and process checks are asynchronous.
+The monitor refreshes every three seconds by default, sampling process identity, PID, start time, uptime, working set, CPU delta, health, exit code, errors, and last-check time. Health failures transition from Starting to Failed after the configured grace period. Stored PIDs are never trusted alone: start time and executable identity must also match. Network and process checks are asynchronous.
 
 The Live Log tab reads only a bounded tail with shared file access, displays a useful missing-file message, refreshes as the file grows or is recreated, and supports pause/resume, clear, external open, and containing-folder open.
 
 ## Security and limitations
 
-The first version manages local processes only. Elevated processes may require running the application as administrator. NATS and TIBCO RV remain separately installed dependencies; no TIBCO libraries are required to compile. Graceful console shutdown is product/host dependent, so the configured timeout can fall back to terminating the process tree. Protect product configuration files because they may contain credentials.
+The first version manages local processes only. Elevated processes may require running the application as administrator. NATS and TIBCO RV remain separately installed dependencies; no TIBCO libraries are required to compile. Graceful console shutdown is product/host dependent—particularly on Windows—so the configured timeout can fall back to terminating the process tree. Protect product configuration files because they may contain credentials.
 
 Current roadmap items include remote host agents, richer per-product graceful shutdown, Windows service integration, credential storage, log rotation notifications, and historical metrics.

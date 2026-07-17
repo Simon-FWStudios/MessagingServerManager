@@ -23,6 +23,7 @@ public sealed class ServerDefinition
     public bool StartWithApplication { get; set; }
     public bool AutoRestart { get; set; }
     public int GracefulStopTimeoutSeconds { get; set; } = 10;
+    public int HealthCheckGracePeriodSeconds { get; set; } = 10;
     public bool ForceKillAfterTimeout { get; set; } = true;
     public NatsOptions Nats { get; set; } = new();
     public TibRvOptions TibRv { get; set; } = new();
@@ -65,6 +66,14 @@ public sealed class ConfigurationEnvelope<T>
     public T Data { get; set; } = default!;
 }
 
+public sealed class PortableConfigurationBundle
+{
+    public int SchemaVersion { get; set; } = 1;
+    public DateTime ExportedAtUtc { get; set; } = DateTime.UtcNow;
+    public GlobalSettings Settings { get; set; } = new();
+    public List<ServerDefinition> Servers { get; set; } = [];
+}
+
 public sealed class RuntimeProcessState
 {
     public Guid ServerId { get; set; }
@@ -72,6 +81,8 @@ public sealed class RuntimeProcessState
     public DateTime StartTimeUtc { get; set; }
     public string Executable { get; set; } = "";
     public int? LastExitCode { get; set; }
+    public DateTime? LastExitTimeUtc { get; set; }
+    public int RestartCount { get; set; }
 }
 
 public sealed record RunningProcessInfo(int ProcessId, DateTime StartTimeUtc, string Executable);
@@ -83,15 +94,22 @@ public sealed record ServerHealthResult(bool IsHealthy, string Message)
 public sealed record StopResult(bool Stopped, bool WasForced, string? Error = null);
 public sealed record ValidationResult(IReadOnlyList<string> Errors) { public bool IsValid => Errors.Count == 0; }
 
+/// <summary>Defines product-specific process construction, health checks, identity matching, and shutdown.</summary>
 public interface IServerAdapter
 {
+    /// <summary>Gets the server product supported by this adapter.</summary>
     ServerType ServerType { get; }
+    /// <summary>Builds the effective process start information for a server definition.</summary>
     ProcessStartInfo BuildStartInfo(ServerDefinition definition, GlobalSettings settings);
+    /// <summary>Checks process and product health without blocking the caller.</summary>
     Task<ServerHealthResult> CheckHealthAsync(ServerDefinition definition, RunningProcessInfo? process, CancellationToken cancellationToken);
+    /// <summary>Stops a validated process gracefully where supported, with configured forced termination fallback.</summary>
     Task<StopResult> StopAsync(ServerDefinition definition, RunningProcessInfo process, CancellationToken cancellationToken);
+    /// <summary>Determines whether a live process matches the configured executable identity.</summary>
     bool MatchesProcess(ServerDefinition definition, Process process);
 }
 
+/// <summary>Loads and atomically saves durable application configuration.</summary>
 public interface IConfigurationStore
 {
     Task<T> LoadAsync<T>(string fileName, T fallback, CancellationToken cancellationToken = default);
@@ -108,7 +126,10 @@ public static class ServerValidator
         if (all.Any(x => x.Id != server.Id && string.Equals(x.Name, server.Name, StringComparison.OrdinalIgnoreCase))) errors.Add("Server names must be unique.");
         var ports = GetPorts(server).Where(x => x.HasValue).Select(x => x!.Value).ToList();
         if (ports.Any(x => x is < 1 or > 65535)) errors.Add("Ports must be between 1 and 65535.");
+        if (ports.Count != ports.Distinct().Count()) errors.Add("Ports within a server definition must be unique.");
         if (server.ServerType == ServerType.Nats && server.Nats.MonitoringPort == server.Nats.ClientPort) errors.Add("NATS monitoring and client ports must differ.");
+        if (server.GracefulStopTimeoutSeconds < 0) errors.Add("Graceful stop timeout cannot be negative.");
+        if (server.HealthCheckGracePeriodSeconds < 0) errors.Add("Health-check grace period cannot be negative.");
         var others = all.Where(x => x.Id != server.Id).SelectMany(GetPorts).Where(x => x.HasValue).Select(x => x!.Value).ToHashSet();
         foreach (var port in ports.Distinct().Where(others.Contains)) errors.Add($"Port {port} is already configured.");
         if (server.LaunchMode == LaunchMode.ConfigFile && (string.IsNullOrWhiteSpace(server.ConfigFilePath) || !File.Exists(resolvePath(server.ConfigFilePath)))) errors.Add("The config file does not exist.");

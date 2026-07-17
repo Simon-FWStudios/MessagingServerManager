@@ -4,6 +4,7 @@ obj/
 TestResults/
 coverage/
 tmp/
+tools/
 *.user
 *.suo
 servers.json

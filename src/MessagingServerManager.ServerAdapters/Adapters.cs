@@ -15,7 +15,7 @@ public abstract class ServerAdapterBase : IServerAdapter
     public abstract ProcessStartInfo BuildStartInfo(ServerDefinition definition, GlobalSettings settings);
     public abstract Task<ServerHealthResult> CheckHealthAsync(ServerDefinition definition, RunningProcessInfo? process, CancellationToken cancellationToken);
     public virtual bool MatchesProcess(ServerDefinition definition, Process process) => ProcessIdentity.ExecutableMatches(process, definition.Executable);
-    public async Task<StopResult> StopAsync(ServerDefinition definition, RunningProcessInfo processInfo, CancellationToken cancellationToken)
+    public virtual async Task<StopResult> StopAsync(ServerDefinition definition, RunningProcessInfo processInfo, CancellationToken cancellationToken)
     {
         try
         {
@@ -43,7 +43,8 @@ public sealed class NatsServerAdapter : ServerAdapterBase
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(2) };
     public NatsServerAdapter(PathResolver paths, TcpHealthChecker tcp) : base(paths, tcp) { }
     public override ServerType ServerType => ServerType.Nats;
-    public string BuildArguments(ServerDefinition d) => d.LaunchMode switch
+    public string BuildArguments(ServerDefinition d) => BuildArguments(d, new GlobalSettings());
+    public string BuildArguments(ServerDefinition d, GlobalSettings settings) => d.LaunchMode switch
     {
         LaunchMode.ConfigFile => $"-c {Q(Paths.Resolve(d.ConfigFilePath!))}" + Extra(d),
         LaunchMode.CustomArguments => d.AdditionalArguments ?? "",
@@ -51,14 +52,44 @@ public sealed class NatsServerAdapter : ServerAdapterBase
              (d.Nats.MonitoringPort is int m ? $" --http_port {m}" : "") +
              (d.Nats.ClusterPort is int c ? $" --cluster nats://0.0.0.0:{c}" : "") +
              (!string.IsNullOrWhiteSpace(d.Nats.StoreDirectory) ? $" --store_dir {Q(Paths.Resolve(d.Nats.StoreDirectory))}" : "") + Extra(d)
+             + (!string.IsNullOrWhiteSpace(d.LogFilePath) ? $" --log {Q(ResolveLogPath(d, settings))}" : "")
     };
     private static string Extra(ServerDefinition d) => string.IsNullOrWhiteSpace(d.AdditionalArguments) ? "" : " " + d.AdditionalArguments;
-    public override ProcessStartInfo BuildStartInfo(ServerDefinition d, GlobalSettings settings) => StartInfo(d, BuildArguments(d));
+    public override ProcessStartInfo BuildStartInfo(ServerDefinition d, GlobalSettings settings) => StartInfo(d, BuildArguments(d, settings));
+    public override async Task<StopResult> StopAsync(ServerDefinition definition, RunningProcessInfo processInfo, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var signal = Process.Start(new ProcessStartInfo
+            {
+                FileName = Environment.ExpandEnvironmentVariables(definition.Executable),
+                Arguments = $"--signal stop={processInfo.ProcessId}",
+                WorkingDirectory = string.IsNullOrWhiteSpace(definition.WorkingDirectory) ? Paths.ConfigurationDirectory : Paths.Resolve(definition.WorkingDirectory),
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            if (signal is not null) await signal.WaitForExitAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(3), cancellationToken);
+            using var target = Process.GetProcessById(processInfo.ProcessId);
+            await target.WaitForExitAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(Math.Max(1, definition.GracefulStopTimeoutSeconds)), cancellationToken);
+            return new(true, false);
+        }
+        catch (ArgumentException) { return new(true, false); }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or TimeoutException)
+        {
+            return await base.StopAsync(definition, processInfo, cancellationToken);
+        }
+    }
     public override async Task<ServerHealthResult> CheckHealthAsync(ServerDefinition d, RunningProcessInfo? p, CancellationToken ct)
     {
         if (p is null) return ServerHealthResult.Unhealthy("Process is not running.");
         if (d.Nats.MonitoringPort is int port) try { using var response = await _http.GetAsync($"http://{d.HealthCheckHost}:{port}/varz", ct); return response.IsSuccessStatusCode ? ServerHealthResult.Healthy("NATS /varz healthy") : ServerHealthResult.Unhealthy($"NATS returned {(int)response.StatusCode}"); } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { return ServerHealthResult.Unhealthy(ex.Message); }
         return await Tcp.CheckAsync(d.HealthCheckHost, d.Nats.ClientPort, TimeSpan.FromSeconds(2), ct);
+    }
+    private string ResolveLogPath(ServerDefinition d, GlobalSettings settings)
+    {
+        var path = Path.IsPathRooted(Environment.ExpandEnvironmentVariables(d.LogFilePath!)) ? Paths.Resolve(d.LogFilePath!) : Paths.Resolve(Path.Combine(settings.LoggingRootDirectory, d.LogFilePath!));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        return path;
     }
 }
 
@@ -66,18 +97,25 @@ public sealed class TibRvServerAdapter : ServerAdapterBase
 {
     public TibRvServerAdapter(PathResolver paths, TcpHealthChecker tcp) : base(paths, tcp) { }
     public override ServerType ServerType => ServerType.TibcoRendezvous;
-    public string BuildArguments(ServerDefinition d) => d.LaunchMode == LaunchMode.CustomArguments ? d.AdditionalArguments ?? "" :
+    public string BuildArguments(ServerDefinition d) => BuildArguments(d, new GlobalSettings());
+    public string BuildArguments(ServerDefinition d, GlobalSettings settings) => d.LaunchMode == LaunchMode.CustomArguments ? d.AdditionalArguments ?? "" :
         $"-service {d.TibRv.Service}" +
         (!string.IsNullOrWhiteSpace(d.TibRv.Network) ? $" -network {Q(d.TibRv.Network)}" : "") +
         (!string.IsNullOrWhiteSpace(d.TibRv.DaemonAddress) ? $" -daemon {Q(d.TibRv.DaemonAddress)}" : "") +
         (d.TibRv.HttpAdministrationPort is int h ? $" -http {h}" : "") +
-        (!string.IsNullOrWhiteSpace(d.LogFilePath) ? $" -logfile {Q(Paths.Resolve(d.LogFilePath))}" : "") +
+        (!string.IsNullOrWhiteSpace(d.LogFilePath) ? $" -logfile {Q(ResolveLogPath(d, settings))}" : "") +
         (string.IsNullOrWhiteSpace(d.AdditionalArguments) ? "" : " " + d.AdditionalArguments);
-    public override ProcessStartInfo BuildStartInfo(ServerDefinition d, GlobalSettings settings) => StartInfo(d, BuildArguments(d));
+    public override ProcessStartInfo BuildStartInfo(ServerDefinition d, GlobalSettings settings) => StartInfo(d, BuildArguments(d, settings));
     public override Task<ServerHealthResult> CheckHealthAsync(ServerDefinition d, RunningProcessInfo? p, CancellationToken ct)
     {
         if (p is null) return Task.FromResult(ServerHealthResult.Unhealthy("Process is not running."));
         var port = d.TibRv.HttpAdministrationPort ?? d.TibRv.ListenPort ?? d.HealthCheckPort;
         return port is int value ? Tcp.CheckAsync(d.HealthCheckHost, value, TimeSpan.FromSeconds(2), ct) : Task.FromResult(ServerHealthResult.Healthy("Process is running."));
+    }
+    private string ResolveLogPath(ServerDefinition d, GlobalSettings settings)
+    {
+        var path = Path.IsPathRooted(Environment.ExpandEnvironmentVariables(d.LogFilePath!)) ? Paths.Resolve(d.LogFilePath!) : Paths.Resolve(Path.Combine(settings.LoggingRootDirectory, d.LogFilePath!));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        return path;
     }
 }
