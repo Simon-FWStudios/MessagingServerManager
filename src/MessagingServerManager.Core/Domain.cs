@@ -72,6 +72,8 @@ public sealed class GlobalSettings
     public bool AutoStartEnabledServers { get; set; }
     public long MonitoringLogMaximumBytes { get; set; } = 5 * 1024 * 1024;
     public int MonitoringLogRetainedFiles { get; set; } = 3;
+    public bool ShowMetricSparklines { get; set; } = true;
+    public int MetricSparklineMinutes { get; set; } = 5;
 }
 
 public sealed class ConfigurationEnvelope<T>

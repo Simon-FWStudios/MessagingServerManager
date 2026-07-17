@@ -65,6 +65,36 @@ public sealed class CommandTests
         Assert.Equal("10k", row.InMessageRateText);
         Assert.Equal("10k", row.OutMessageRateText);
         Assert.Equal("↓ 10k  ↑ 10k", row.MessageRateText);
+        Assert.Equal("In 10k/s • Out 10k/s", row.MessageRateLineText);
+    }
+
+    [Fact]
+    public void Remote_nats_telemetry_updates_cpu_and_memory_cards()
+    {
+        var row = new ServerRowViewModel(new ServerDefinition());
+
+        row.ApplyTelemetry(new RemoteServerTelemetry("id", "name", "1", 4222, 8222, TimeSpan.FromSeconds(10), 12.3, 128 * 1048576, 2, 3, 0, 0, 100, 50, 0, 100, 2, 0, 0, 0, "", "", "", DateTimeOffset.UtcNow, true, "{}"));
+
+        Assert.Equal("12.3%", row.CpuText);
+        Assert.Equal("128.0 MB", row.MemoryText);
+    }
+
+    [Fact]
+    public void Metric_sparklines_keep_only_the_configured_history_window()
+    {
+        var row = new ServerRowViewModel(new ServerDefinition());
+        var sample = DateTimeOffset.UtcNow;
+
+        row.ApplyTelemetry(new RemoteServerTelemetry("id", "name", "1", 4222, 8222, TimeSpan.FromSeconds(10), 1, 100, 10, 3, 0, 0, 100, 50, 0, 100, 2, 0, 0, 0, "", "", "", sample.AddMinutes(-10), true, "{}"));
+        row.RecordMetricSample(sample.AddMinutes(-10), 5);
+        row.ApplyTelemetry(new RemoteServerTelemetry("id", "name", "1", 4222, 8222, TimeSpan.FromSeconds(11), 2, 200, 20, 3, 10, 10, 200, 100, 0, 100, 2, 0, 0, 0, "", "", "", sample, true, "{}"));
+        row.RecordMetricSample(sample, 5);
+
+        Assert.Contains("1 sample", row.SparklineTooltip);
+        Assert.Equal(2, row.ConnectionsSparkline.Count);
+
+        row.ClearMetricHistory();
+        Assert.Empty(row.ConnectionsSparkline);
     }
 
     [Fact]
@@ -89,6 +119,33 @@ public sealed class CommandTests
         var row = new ServerRowViewModel(new ServerDefinition());
         Assert.Equal(ServerStatus.Stopped, row.Status);
         Assert.Same(Brushes.SlateGray, row.StatusBrush);
+    }
+
+    [Fact]
+    public void Last_exit_code_hides_empty_and_negative_values()
+    {
+        var row = new ServerRowViewModel(new ServerDefinition());
+        Assert.Equal("—", row.LastExitCodeText);
+        row.LastExitCode = -1;
+        Assert.Equal("—", row.LastExitCodeText);
+        row.LastExitCode = 2;
+        Assert.Equal("2", row.LastExitCodeText);
+    }
+
+    [Fact]
+    public void Server_summary_notifies_when_rows_or_status_change()
+    {
+        using var viewModel = new MainViewModel(new(Path.GetTempPath()), new MemoryStore(), new(), [new RefreshAdapter()], new());
+        var notifications = new List<string?>();
+        viewModel.PropertyChanged += (_, e) => notifications.Add(e.PropertyName);
+        var row = new ServerRowViewModel(new() { Name = "Observed" });
+
+        viewModel.Servers.Add(row);
+        row.Status = ServerStatus.Running;
+
+        Assert.Contains(nameof(MainViewModel.ServerSummaryText), notifications);
+        Assert.StartsWith("1 running", viewModel.ServerSummaryText);
+        Assert.EndsWith("1 total", viewModel.ServerSummaryText);
     }
 
     [Fact]

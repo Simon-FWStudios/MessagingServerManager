@@ -9,6 +9,7 @@
       <Setter Property="BorderBrush" Value="Transparent"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
       <Style.Triggers>
         <Trigger Property="IsMouseOver" Value="True">
           <Setter Property="Background" Value="#EEF3F9"/>
@@ -31,10 +32,12 @@
       </Style.Triggers>
     </Style>
     <Style x:Key="CompactActionButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-      <Setter Property="Width" Value="34"/>
-      <Setter Property="Height" Value="28"/>
+      <Setter Property="Width" Value="36"/>
+      <Setter Property="Height" Value="30"/>
       <Setter Property="Padding" Value="4,2"/>
       <Setter Property="Margin" Value="2,1"/>
+      <Setter Property="Background" Value="#F8FAFC"/>
+      <Setter Property="BorderBrush" Value="#DCE5EF"/>
       <Setter Property="VerticalContentAlignment" Value="Center"/>
       <Setter Property="HorizontalContentAlignment" Value="Center"/>
     </Style>
@@ -267,22 +270,10 @@
                 </DataTemplate>
               </DataGridTemplateColumn.CellTemplate>
             </DataGridTemplateColumn>
-            <DataGridTemplateColumn Header="Messages/s" SortMemberPath="MessageRateTotal" Width="1.45*" MinWidth="154">
+            <DataGridTemplateColumn Header="Message Rate" SortMemberPath="MessageRateTotal" Width="1.45*" MinWidth="154">
               <DataGridTemplateColumn.CellTemplate>
                 <DataTemplate>
-                  <Grid ToolTip="{Binding ActivityTooltip}" VerticalAlignment="Center">
-                    <Grid.ColumnDefinitions>
-                      <ColumnDefinition Width="14"/>
-                      <ColumnDefinition Width="*"/>
-                      <ColumnDefinition Width="10"/>
-                      <ColumnDefinition Width="14"/>
-                      <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="↓" Foreground="#526075" VerticalAlignment="Center"/>
-                    <TextBlock Grid.Column="1" Text="{Binding InMessageRateText}" Style="{StaticResource CenteredCellText}" TextAlignment="Left"/>
-                    <TextBlock Grid.Column="3" Text="↑" Foreground="#526075" VerticalAlignment="Center"/>
-                    <TextBlock Grid.Column="4" Text="{Binding OutMessageRateText}" Style="{StaticResource CenteredCellText}" TextAlignment="Left"/>
-                  </Grid>
+                  <TextBlock Text="{Binding MessageRateLineText}" ToolTip="{Binding MessageRateTooltip}" Style="{StaticResource CenteredCellText}"/>
                 </DataTemplate>
               </DataGridTemplateColumn.CellTemplate>
             </DataGridTemplateColumn>
@@ -314,24 +305,44 @@
           <StackPanel>
             <TextBlock Text="CONNECTIONS" Style="{StaticResource MetricLabel}"/>
             <TextBlock Text="{Binding Selected.ConnectionsText}" Style="{StaticResource MetricValue}"/>
+            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.SparklineTooltip}">
+              <Canvas Width="120" Height="28">
+                <Polyline Points="{Binding Selected.ConnectionsSparkline}" Stroke="#2F80ED" StrokeThickness="2" StrokeLineJoin="Round"/>
+              </Canvas>
+            </Viewbox>
           </StackPanel>
         </Border>
         <Border Style="{StaticResource Card}" Margin="0,0,8,0">
           <StackPanel>
-            <TextBlock Text="MESSAGE RATE" Style="{StaticResource MetricLabel}"/>
-            <TextBlock Text="{Binding Selected.MessageRateText}" Style="{StaticResource MetricValue}"/>
+            <TextBlock Text="MESSAGE RATE (IN / OUT)" Style="{StaticResource MetricLabel}"/>
+            <TextBlock Text="{Binding Selected.MessageRateText}" ToolTip="{Binding Selected.MessageRateTooltip}" Style="{StaticResource MetricValue}"/>
+            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.SparklineTooltip}">
+              <Canvas Width="120" Height="28">
+                <Polyline Points="{Binding Selected.MessageRateSparkline}" Stroke="#37A169" StrokeThickness="2" StrokeLineJoin="Round"/>
+              </Canvas>
+            </Viewbox>
           </StackPanel>
         </Border>
         <Border Style="{StaticResource Card}" Margin="0,0,8,0">
           <StackPanel>
             <TextBlock Text="CPU" Style="{StaticResource MetricLabel}"/>
             <TextBlock Text="{Binding Selected.CpuText}" Style="{StaticResource MetricValue}"/>
+            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.SparklineTooltip}">
+              <Canvas Width="120" Height="28">
+                <Polyline Points="{Binding Selected.CpuSparkline}" Stroke="#B66A12" StrokeThickness="2" StrokeLineJoin="Round"/>
+              </Canvas>
+            </Viewbox>
           </StackPanel>
         </Border>
         <Border Style="{StaticResource Card}">
           <StackPanel>
             <TextBlock Text="MEMORY" Style="{StaticResource MetricLabel}"/>
             <TextBlock Text="{Binding Selected.MemoryText}" Style="{StaticResource MetricValue}"/>
+            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.SparklineTooltip}">
+              <Canvas Width="120" Height="28">
+                <Polyline Points="{Binding Selected.MemorySparkline}" Stroke="#805AD5" StrokeThickness="2" StrokeLineJoin="Round"/>
+              </Canvas>
+            </Viewbox>
           </StackPanel>
         </Border>
       </UniformGrid>
@@ -412,7 +423,7 @@
               <TextBlock Grid.Row="1" Text="Telemetry" FontWeight="SemiBold"/>
               <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Selected.TelemetryFreshnessText}" TextWrapping="Wrap"/>
               <TextBlock Grid.Row="2" Text="Last exit code" FontWeight="SemiBold"/>
-              <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Selected.LastExitCode}"/>
+              <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Selected.LastExitCodeText}"/>
               <TextBlock Grid.Row="3" Text="Last error" FontWeight="SemiBold"/>
               <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Selected.LastError}" Foreground="#B91C1C" TextWrapping="Wrap"/>
             </Grid>
@@ -480,7 +491,7 @@
               <TextBlock Text="{Binding Selected.Started,StringFormat=Started: {0:G}}"/>
               <TextBlock Text="{Binding Selected.LastChecked,StringFormat=Last checked: {0:G}}"/>
               <TextBlock Text="{Binding Selected.LastExitTime,StringFormat=Last exit: {0:G}}"/>
-              <TextBlock Text="{Binding Selected.LastExitCode,StringFormat=Exit code: {0}}"/>
+              <TextBlock Text="{Binding Selected.LastExitCodeText,StringFormat=Exit code: {0}}"/>
               <TextBlock Text="{Binding Selected.RestartCount,StringFormat=Restart count: {0}}"/>
             </StackPanel>
             <StackPanel Grid.Column="1">

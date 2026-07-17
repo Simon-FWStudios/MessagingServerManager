@@ -155,6 +155,44 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Batched_message_flow_populates_metric_sparklines_over_time()
+    {
+        var (manager, adapter, definition) = CreateManagedServer();
+        await manager.StartAsync(definition);
+        _ = await WaitForHealthyAsync(adapter, manager, definition);
+
+        var row = new ServerRowViewModel(definition)
+        {
+            Pid = manager.Get(definition.Id)!.Process.Id,
+            Status = ServerStatus.Running
+        };
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, definition.Nats.ClientPort);
+        await using var stream = client.GetStream();
+        Assert.StartsWith("INFO ", await ReadNatsLineAsync(stream));
+        await WriteNatsProtocolAsync(stream, "CONNECT {\"verbose\":false}\r\nSUB telemetry.chart 1\r\nPING\r\n");
+        await WaitForNatsLineAsync(stream, "PONG", TimeSpan.FromSeconds(5));
+
+        for (var batch = 0; batch < 5; batch++)
+        {
+            await PublishBatchAsync(stream, "telemetry.chart", 75, $"chart-{batch}");
+            await Task.Delay(1100);
+            var telemetry = await adapter.GetTelemetryAsync(definition, CancellationToken.None);
+            row.ApplyTelemetry(telemetry);
+            row.MarkTelemetryAvailable();
+            row.RecordMetricSample(telemetry.SampleTime, 10);
+        }
+
+        Assert.True(row.HasRawTelemetry);
+        Assert.True(row.MessageRateTotal > 0, $"Expected message rate to be calculated, actual text was '{row.MessageRateText}'.");
+        Assert.True(row.ConnectionsSparkline.Count >= 5, $"Expected multiple connection sparkline points, got {row.ConnectionsSparkline.Count}.");
+        Assert.True(row.MessageRateSparkline.Count >= 5, $"Expected multiple message-rate sparkline points, got {row.MessageRateSparkline.Count}.");
+        Assert.True(row.CpuSparkline.Count >= 5, $"Expected multiple CPU sparkline points, got {row.CpuSparkline.Count}.");
+        Assert.True(row.MemorySparkline.Count >= 5, $"Expected multiple memory sparkline points, got {row.MemorySparkline.Count}.");
+    }
+
+    [Fact]
     public async Task Managed_tls_server_is_monitored_over_https_with_generated_ca()
     {
         var certificates = CreateTestCertificates();
@@ -480,6 +518,33 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
             if (singleByte[0] != (byte)'\r') bytes.Add(singleByte[0]);
         }
         return Encoding.ASCII.GetString(bytes.ToArray());
+    }
+
+    private static async Task WaitForNatsLineAsync(Stream stream, string expected, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var line = await ReadNatsLineAsync(stream);
+            if (line.Equals(expected, StringComparison.OrdinalIgnoreCase)) return;
+        }
+        throw new TimeoutException($"NATS protocol line '{expected}' was not received within {timeout}.");
+    }
+
+    private static async Task PublishBatchAsync(Stream stream, string subject, int count, string payload)
+    {
+        var protocol = new StringBuilder();
+        var byteCount = Encoding.ASCII.GetByteCount(payload);
+        for (var index = 0; index < count; index++)
+            protocol.Append("PUB ").Append(subject).Append(' ').Append(byteCount).Append("\r\n").Append(payload).Append("\r\n");
+        await WriteNatsProtocolAsync(stream, protocol.ToString());
+    }
+
+    private static async Task WriteNatsProtocolAsync(Stream stream, string protocol)
+    {
+        var bytes = Encoding.ASCII.GetBytes(protocol);
+        await stream.WriteAsync(bytes);
+        await stream.FlushAsync();
     }
 
     private static string LocateNatsServer()
