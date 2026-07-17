@@ -95,7 +95,9 @@ curl.exe --cacert test-certificates\ca.pem ^
 If monitoring does not require a client certificate, omit `--cert` and `--key`.
 Endpoint-security products that perform HTTPS inspection may replace the
 localhost certificate. Exclude localhost/port 8223 from TLS inspection before
-running the complete local-and-remote integration assertion.
+running the complete local-and-remote integration assertion. The tests fail by
+default when this occurs. For an explicitly accepted local-only bypass, set
+`MSM_ALLOW_TLS_INSPECTION_TEST_BYPASS=1`; CI should not set this variable.
 
 Browsers will warn unless `ca.pem` is imported into the Windows trust store.
 Importing it is unnecessary for the manager, NATS CLI, and `curl` examples and

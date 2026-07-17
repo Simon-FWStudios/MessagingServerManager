@@ -161,6 +161,14 @@ public interface IConfigurationStore
 
 public static class ServerValidator
 {
+    public static IReadOnlyList<string> ValidateIdentities(IEnumerable<ServerDefinition> servers)
+    {
+        var definitions = servers.ToList();
+        var errors = definitions.Where(server => server.Id == Guid.Empty).Select(server => $"{server.Name}: Server ID cannot be empty.").ToList();
+        errors.AddRange(definitions.GroupBy(server => server.Id).Where(group => group.Key != Guid.Empty && group.Count() > 1)
+            .Select(group => $"Server ID {group.Key} is used by multiple definitions: {string.Join(", ", group.Select(server => server.Name))}."));
+        return errors;
+    }
     public static ValidationResult Validate(ServerDefinition server, IEnumerable<ServerDefinition> all, Func<string, string> resolvePath)
     {
         var errors = new List<string>();

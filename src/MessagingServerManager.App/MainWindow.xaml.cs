@@ -27,9 +27,9 @@ public partial class MainWindow : Window
         if (_shutdownComplete || DataContext is not MainViewModel viewModel) return;
         e.Cancel = true;
         IsEnabled = false;
-        await viewModel.ShutdownAsync();
-        _shutdownComplete = true;
-        Close();
+        try { await viewModel.ShutdownAsync(); }
+        catch (Exception ex) { MessageBox.Show(ex.GetBaseException().Message, "Shutdown warning", MessageBoxButton.OK, MessageBoxImage.Warning); }
+        finally { _shutdownComplete = true; Close(); }
     }
 
     [DllImport("dwmapi.dll")]

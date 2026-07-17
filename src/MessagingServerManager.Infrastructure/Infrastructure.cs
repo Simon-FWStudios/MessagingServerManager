@@ -6,6 +6,8 @@ using MessagingServerManager.Core;
 
 namespace MessagingServerManager.Infrastructure;
 
+public sealed class ConfigurationLoadException(string message, Exception? innerException = null) : IOException(message, innerException);
+
 public sealed class PathResolver
 {
     public string ConfigurationDirectory { get; }
@@ -26,16 +28,31 @@ public sealed class JsonConfigurationStore : IConfigurationStore
     public async Task<T> LoadAsync<T>(string fileName, T fallback, CancellationToken cancellationToken = default)
     {
         var path = _paths.Resolve(fileName);
-        if (!File.Exists(path)) return fallback;
+        var backup = path + ".bak";
+        if (!File.Exists(path))
+        {
+            if (!File.Exists(backup)) return fallback;
+            var recovered = await TryLoadAsync<T>(backup, cancellationToken);
+            if (recovered.Success)
+            {
+                TryRestoreMissingPrimary(backup, path);
+                return ApplyLoadedMigrations(recovered.Value!);
+            }
+            throw new ConfigurationLoadException($"Configuration '{path}' is missing and its backup is unreadable. The backup was preserved.");
+        }
         var loaded = await TryLoadAsync<T>(path, cancellationToken);
         if (loaded.Success) return ApplyLoadedMigrations(loaded.Value!);
-        var backup = path + ".bak";
         if (File.Exists(backup))
         {
             loaded = await TryLoadAsync<T>(backup, cancellationToken);
             if (loaded.Success) return ApplyLoadedMigrations(loaded.Value!);
         }
-        return fallback;
+        throw new ConfigurationLoadException($"Configuration '{path}' is unreadable and no valid backup is available. The existing files were preserved.");
+    }
+    private static void TryRestoreMissingPrimary(string backup, string path)
+    {
+        try { File.Copy(backup, path, overwrite: false); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
     private static T ApplyLoadedMigrations<T>(T value)
     {
@@ -211,7 +228,7 @@ public sealed class ProcessManager : IDisposable
     private readonly Dictionary<ServerType, IServerAdapter> _adapters;
     private readonly GlobalSettings _settings;
     private volatile bool _disposed;
-    public event Action<Guid, int?>? ProcessExited;
+    public event Action<Guid, int, int?>? ProcessExited;
     public ProcessManager(IEnumerable<IServerAdapter> adapters, GlobalSettings settings) { _adapters = adapters.ToDictionary(x => x.ServerType); _settings = settings; }
     public ManagedProcess? Get(Guid id) { lock (_gate) return _processes.GetValueOrDefault(id); }
     public bool TryRecover(ServerDefinition server, int processId)
@@ -226,6 +243,8 @@ public sealed class ProcessManager : IDisposable
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
     }
     public bool TryRecoverByTcpPort(ServerDefinition server, int port)
+        => TryRecoverByTcpPorts(server, [port]);
+    public bool TryRecoverByTcpPorts(ServerDefinition server, IEnumerable<int> ports)
     {
         try
         {
@@ -233,15 +252,27 @@ public sealed class ProcessManager : IDisposable
             if (netstat is null) return false;
             var output = netstat.StandardOutput.ReadToEnd();
             if (!netstat.WaitForExit(3000)) { netstat.Kill(); return false; }
-            foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-            {
-                var fields = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-                if (fields.Length < 5 || !fields[^2].Equals("LISTENING", StringComparison.OrdinalIgnoreCase) || !fields[1].EndsWith(":" + port, StringComparison.Ordinal)) continue;
-                if (int.TryParse(fields[^1], out var processId) && TryRecover(server, processId)) return true;
-            }
+            foreach (var processId in FindCommonListeningProcessIds(output, ports))
+                if (TryRecover(server, processId)) return true;
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
         return false;
+    }
+    public static IReadOnlyList<int> FindCommonListeningProcessIds(string netstatOutput, IEnumerable<int> ports)
+    {
+        var requiredPorts = ports.Where(port => port is > 0 and <= 65535).Distinct().ToArray();
+        if (requiredPorts.Length == 0) return [];
+        var owners = requiredPorts.ToDictionary(port => port, _ => new HashSet<int>());
+        foreach (var line in netstatOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var fields = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (fields.Length < 5 || !fields[^2].Equals("LISTENING", StringComparison.OrdinalIgnoreCase) || !int.TryParse(fields[^1], out var processId)) continue;
+            foreach (var port in requiredPorts)
+                if (fields[1].EndsWith(":" + port, StringComparison.Ordinal)) owners[port].Add(processId);
+        }
+        var common = new HashSet<int>(owners[requiredPorts[0]]);
+        foreach (var port in requiredPorts[1..]) common.IntersectWith(owners[port]);
+        return common.Order().ToArray();
     }
     public bool TryRecover(ServerDefinition server, RuntimeProcessState state)
     {
@@ -355,6 +386,7 @@ public sealed class ProcessManager : IDisposable
     }
     private void HandleExited(Guid serverId, ManagedProcess managed)
     {
+        var processId = managed.Process.Id;
         int? code = null;
         try { code = managed.Process.ExitCode; } catch { }
         var removed = false;
@@ -363,7 +395,7 @@ public sealed class ProcessManager : IDisposable
             if (_processes.GetValueOrDefault(serverId) == managed) { _processes.Remove(serverId); removed = true; }
         }
         managed.ExitCompletion.TrySetResult(code);
-        if (removed) ProcessExited?.Invoke(serverId, code);
+        if (removed) ProcessExited?.Invoke(serverId, processId, code);
         managed.Dispose();
     }
     public void Dispose()

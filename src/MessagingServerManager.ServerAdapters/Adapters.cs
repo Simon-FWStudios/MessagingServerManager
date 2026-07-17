@@ -153,7 +153,7 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
     {
         var port = d.Nats.MonitoringPort ?? throw new InvalidOperationException("A NATS monitoring port is required.");
         var endpoint = GetMonitoringUri(d);
-        using var customClient = CreateCustomCaClient(d);
+        using var customClient = CreateTlsClient(d);
         var client = customClient ?? _http;
         var rawJson = await GetStringWithRetryAsync(client, endpoint, ct);
         using var document = JsonDocument.Parse(rawJson);
@@ -204,45 +204,38 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
         var port = definition.Nats.MonitoringPort ?? throw new InvalidOperationException("A NATS monitoring port is required.");
         return new UriBuilder(definition.Nats.UseTls ? "https" : "http", definition.HealthCheckHost, port, path).Uri;
     }
-    private HttpClient? CreateCustomCaClient(ServerDefinition d)
+    private HttpClient? CreateTlsClient(ServerDefinition d)
     {
-        if (!d.Nats.UseTls || string.IsNullOrWhiteSpace(d.Nats.TlsCaCertificatePath)) return null;
-        var ca = X509Certificate2.CreateFromPem(File.ReadAllText(Paths.Resolve(d.Nats.TlsCaCertificatePath)));
+        if (!d.Nats.UseTls) return null;
+        var hasCustomCa = !string.IsNullOrWhiteSpace(d.Nats.TlsCaCertificatePath);
+        var hasClientCertificate = !string.IsNullOrWhiteSpace(d.Nats.TlsClientCertificatePath) && !string.IsNullOrWhiteSpace(d.Nats.TlsClientPrivateKeyPath);
+        if (!hasCustomCa && !hasClientCertificate) return null;
         var handler = new HttpClientHandler();
-        if (!string.IsNullOrWhiteSpace(d.Nats.TlsClientCertificatePath) && !string.IsNullOrWhiteSpace(d.Nats.TlsClientPrivateKeyPath))
+        if (hasClientCertificate)
         {
-            var certificatePem = File.ReadAllText(Paths.Resolve(d.Nats.TlsClientCertificatePath));
-            var keyPem = File.ReadAllText(Paths.Resolve(d.Nats.TlsClientPrivateKeyPath));
+            var certificatePem = File.ReadAllText(Paths.Resolve(d.Nats.TlsClientCertificatePath!));
+            var keyPem = File.ReadAllText(Paths.Resolve(d.Nats.TlsClientPrivateKeyPath!));
             using var publicCertificate = X509Certificate2.CreateFromPem(certificatePem);
             using var privateKey = RSA.Create();
             privateKey.ImportFromPem(keyPem);
             using var certificateWithKey = publicCertificate.CopyWithPrivateKey(privateKey);
             handler.ClientCertificates.Add(new X509Certificate2(certificateWithKey.Export(X509ContentType.Pfx)));
         }
-        handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
+        if (hasCustomCa)
         {
-            if (certificate is null) return false;
-            var serverCertificate = new X509Certificate2(certificate);
-            if (serverCertificate.RawData.AsSpan().SequenceEqual(ca.RawData)) return true;
-            if ((errors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0) return false;
-            using var chain = new X509Chain();
-            chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-            chain.ChainPolicy.CustomTrustStore.Add(ca);
-            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-            if (chain.Build(serverCertificate)) return true;
-
-            // Some Windows/OpenSSL certificate combinations do not build with
-            // CustomRootTrust despite the configured CA being the issuing root.
-            // Permit an unknown root only long enough to build the path, then
-            // require that the terminal certificate is exactly the configured CA.
-            using var fallbackChain = new X509Chain();
-            fallbackChain.ChainPolicy.ExtraStore.Add(ca);
-            fallbackChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-            fallbackChain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
-            if (!fallbackChain.Build(serverCertificate) || fallbackChain.ChainElements.Count == 0) return false;
-            var root = fallbackChain.ChainElements[^1].Certificate;
-            return root.RawData.AsSpan().SequenceEqual(ca.RawData);
-        };
+            var caPem = File.ReadAllText(Paths.Resolve(d.Nats.TlsCaCertificatePath!));
+            handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
+            {
+                if (certificate is null || (errors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0) return false;
+                using var serverCertificate = new X509Certificate2(certificate);
+                using var ca = X509Certificate2.CreateFromPem(caPem);
+                using var chain = new X509Chain();
+                chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+                chain.ChainPolicy.CustomTrustStore.Add(ca);
+                chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+                return chain.Build(serverCertificate);
+            };
+        }
         return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(2) };
     }
     private static string String(JsonElement root, string name, string fallback = "") => root.TryGetProperty(name, out var value) ? value.GetString() ?? fallback : fallback;

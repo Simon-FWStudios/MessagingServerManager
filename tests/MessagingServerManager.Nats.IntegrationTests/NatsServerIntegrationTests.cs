@@ -175,7 +175,11 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
         _ = await WaitForHealthyAsync(adapter, manager, definition);
         RemoteServerTelemetry telemetry;
         try { telemetry = await adapter.GetTelemetryAsync(definition, CancellationToken.None); }
-        catch (HttpRequestException ex) when (ex.ToString().Contains("certificate",StringComparison.OrdinalIgnoreCase)) { return; /* Local TLS interception replaced the generated certificate; rejection is the expected secure outcome. */ }
+        catch (HttpRequestException ex) when (ex.ToString().Contains("certificate",StringComparison.OrdinalIgnoreCase))
+        {
+            AssertTlsInspectionBypassEnabled("HTTPS telemetry certificate validation", ex.Message);
+            return;
+        }
         Assert.Equal("integration-tls", telemetry.ServerName);
         Assert.True(telemetry.HealthEndpointHealthy);
     }
@@ -218,7 +222,7 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
         await VerifyMutualTlsClientAsync(clientPort, ca, clientCertificate, clientKey);
         if (!await MonitoringPresentsExpectedCertificateAsync(monitoringPort, serverCertificate, clientCertificate, clientKey))
         {
-            Console.WriteLine("HTTPS/UI telemetry assertions were bypassed because local TLS inspection replaced the NATS certificate. Exclude localhost/port 8223 from TLS inspection to exercise them.");
+            AssertTlsInspectionBypassEnabled("local and remote HTTPS/UI telemetry assertions", "Local TLS inspection replaced the generated NATS certificate.");
             return;
         }
 
@@ -354,15 +358,28 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
     private (string CaCertificate, string ServerCertificate, string ServerKey) CreateTestCertificates()
     {
         using var caKey = RSA.Create(2048);
-        var caRequest = new CertificateRequest("CN=localhost", caKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var caRequest = new CertificateRequest("CN=Messaging Server Manager Integration Test CA", caKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         caRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
-        caRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign | X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
-        caRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new("1.3.6.1.5.5.7.3.1") }, true));
-        var names = new SubjectAlternativeNameBuilder(); names.AddDnsName("localhost"); names.AddIpAddress(IPAddress.Loopback); caRequest.CertificateExtensions.Add(names.Build());
+        caRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
         using var ca = caRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(1));
+
+        using var serverKey = RSA.Create(2048);
+        var serverRequest = new CertificateRequest("CN=localhost", serverKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        serverRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        serverRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
+        serverRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new("1.3.6.1.5.5.7.3.1") }, true));
+        var names = new SubjectAlternativeNameBuilder(); names.AddDnsName("localhost"); names.AddIpAddress(IPAddress.Loopback); serverRequest.CertificateExtensions.Add(names.Build());
+        using var serverCertificate = serverRequest.Create(ca, DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddHours(12), RandomNumberGenerator.GetBytes(16));
         var caPath = Path.Combine(_root, "generated-ca.pem"); var certificatePath = Path.Combine(_root, "generated-server.pem"); var keyPath = Path.Combine(_root, "generated-server.key");
-        File.WriteAllText(caPath, ca.ExportCertificatePem()); File.WriteAllText(certificatePath, ca.ExportCertificatePem()); File.WriteAllText(keyPath, caKey.ExportPkcs8PrivateKeyPem());
+        File.WriteAllText(caPath, ca.ExportCertificatePem()); File.WriteAllText(certificatePath, serverCertificate.ExportCertificatePem()); File.WriteAllText(keyPath, serverKey.ExportPkcs8PrivateKeyPem());
         return (caPath, certificatePath, keyPath);
+    }
+
+    private static void AssertTlsInspectionBypassEnabled(string skippedCoverage, string detail)
+    {
+        Assert.True(string.Equals(Environment.GetEnvironmentVariable("MSM_ALLOW_TLS_INSPECTION_TEST_BYPASS"), "1", StringComparison.Ordinal),
+            $"{skippedCoverage} could not run: {detail} Exclude localhost from TLS inspection, or explicitly set MSM_ALLOW_TLS_INSPECTION_TEST_BYPASS=1 for this intercepted workstation.");
+        Console.WriteLine($"BYPASSED by MSM_ALLOW_TLS_INSPECTION_TEST_BYPASS=1: {skippedCoverage}. {detail}");
     }
 
     private static bool PortIsAvailable(int port)
