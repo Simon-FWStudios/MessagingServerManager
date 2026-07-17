@@ -12,6 +12,7 @@ runtime.json
 settings.json
 logs/
 generated-config/
+test-certificates/
 *.pfx
 *.pem
 *.key

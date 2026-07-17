@@ -123,7 +123,7 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
     private HttpClient? CreateCustomCaClient(ServerDefinition d)
     {
         if (!d.Nats.UseTls || string.IsNullOrWhiteSpace(d.Nats.TlsCaCertificatePath)) return null;
-        var ca = X509Certificate2.CreateFromPemFile(Paths.Resolve(d.Nats.TlsCaCertificatePath));
+        var ca = X509Certificate2.CreateFromPem(File.ReadAllText(Paths.Resolve(d.Nats.TlsCaCertificatePath)));
         var handler = new HttpClientHandler();
         handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
         {
