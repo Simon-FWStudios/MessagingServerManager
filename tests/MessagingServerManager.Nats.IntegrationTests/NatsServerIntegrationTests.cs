@@ -192,6 +192,22 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
         Assert.True(stopped.Stopped, stopped.Error);
     }
 
+    [Fact]
+    public async Task Listening_port_recovers_a_running_nats_process_when_runtime_state_is_stale()
+    {
+        var (firstManager, adapter, definition) = CreateManagedServer();
+        await firstManager.StartAsync(definition);
+        _ = await WaitForHealthyAsync(adapter, firstManager, definition);
+        var telemetry = await adapter.GetTelemetryAsync(definition, CancellationToken.None);
+        firstManager.Dispose();
+        _running.RemoveAll(x => ReferenceEquals(x.Manager, firstManager));
+
+        var recoveredManager = Track(new ProcessManager([adapter], new GlobalSettings()), definition);
+        Assert.True(recoveredManager.TryRecoverByTcpPort(definition, telemetry.ClientPort));
+        var stopped = await recoveredManager.StopAsync(definition);
+        Assert.True(stopped.Stopped, stopped.Error);
+    }
+
     private (ProcessManager Manager, NatsServerAdapter Adapter, ServerDefinition Definition) CreateManagedServer()
     {
         var clientPort = GetAvailablePort();

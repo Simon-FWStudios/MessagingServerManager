@@ -214,6 +214,35 @@ public sealed class ProcessManager : IDisposable
     public event Action<Guid, int?>? ProcessExited;
     public ProcessManager(IEnumerable<IServerAdapter> adapters, GlobalSettings settings) { _adapters = adapters.ToDictionary(x => x.ServerType); _settings = settings; }
     public ManagedProcess? Get(Guid id) { lock (_gate) return _processes.GetValueOrDefault(id); }
+    public bool TryRecover(ServerDefinition server, int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            var executable = process.MainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(executable)) return false;
+            return TryRecover(server, new RuntimeProcessState { ServerId = server.Id, ProcessId = processId, StartTimeUtc = process.StartTime.ToUniversalTime(), Executable = executable });
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
+    }
+    public bool TryRecoverByTcpPort(ServerDefinition server, int port)
+    {
+        try
+        {
+            using var netstat = Process.Start(new ProcessStartInfo { FileName = "netstat.exe", Arguments = "-ano -p TCP", UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true });
+            if (netstat is null) return false;
+            var output = netstat.StandardOutput.ReadToEnd();
+            if (!netstat.WaitForExit(3000)) { netstat.Kill(); return false; }
+            foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                var fields = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (fields.Length < 5 || !fields[^2].Equals("LISTENING", StringComparison.OrdinalIgnoreCase) || !fields[1].EndsWith(":" + port, StringComparison.Ordinal)) continue;
+                if (int.TryParse(fields[^1], out var processId) && TryRecover(server, processId)) return true;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        return false;
+    }
     public bool TryRecover(ServerDefinition server, RuntimeProcessState state)
     {
         if (state.ServerId != server.Id) return false;

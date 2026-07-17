@@ -6,6 +6,10 @@
     <ProjectReference Include="..\MessagingServerManager.ServerAdapters\MessagingServerManager.ServerAdapters.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="FluentIcons.Wpf" Version="2.1.333" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>

@@ -1,5 +1,6 @@
 using MessagingServerManager.App;
 using MessagingServerManager.Core;
+using System.Windows.Media;
 
 namespace MessagingServerManager.App.Tests;
 
@@ -50,5 +51,13 @@ public sealed class CommandTests
         row.ReconcileDefinitionState();
         Assert.Equal(ServerStatus.Disabled, row.Status);
         Assert.False(row.CanStart);
+    }
+
+    [Fact]
+    public void Stopped_server_uses_a_neutral_status_indicator()
+    {
+        var row = new ServerRowViewModel(new ServerDefinition());
+        Assert.Equal(ServerStatus.Stopped, row.Status);
+        Assert.Same(Brushes.SlateGray, row.StatusBrush);
     }
 }
