@@ -279,7 +279,9 @@ public sealed class TibRvServerAdapter : ServerAdapterBase, ITibRvMonitor
         foreach (var source in raw.Split('\n'))
         {
             var line = source.Trim(); if (line.Length == 0 || line[0] == '#') continue;
-            var separator = line.LastIndexOfAny([' ', '\t']); if (separator <= 0 || !double.TryParse(line[(separator + 1)..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value)) continue;
+            var separator = line.IndexOfAny([' ', '\t']); if (separator <= 0) continue;
+            var valueText = line[separator..].TrimStart().Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (valueText is null || !double.TryParse(valueText, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value)) continue;
             var descriptor = line[..separator]; var brace = descriptor.IndexOf('{'); var name = brace >= 0 ? descriptor[..brace] : descriptor;
             var sampleLabels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (brace >= 0 && descriptor.EndsWith('}')) foreach (var pair in descriptor[(brace + 1)..^1].Split(',')) { var equals = pair.IndexOf('='); if (equals > 0) sampleLabels[pair[..equals].Trim()] = pair[(equals + 1)..].Trim().Trim('"'); }

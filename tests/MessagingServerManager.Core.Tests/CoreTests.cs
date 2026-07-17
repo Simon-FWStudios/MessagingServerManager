@@ -31,6 +31,7 @@ public class CoreTests
  rv_service_client_connections{component="rvd",service="7600",network="net-b"} 9
  rv_service_inbound_messages_total{component="rvd",service="7600",network="net-b"} 100
  """;var metrics=TibRvServerAdapter.ParseMetrics(text,"7500","net-a");Assert.Equal(3,metrics.ClientConnections);Assert.Equal(42,metrics.InMessages);Assert.Equal("7500",metrics.Service);Assert.Equal("net-a",metrics.Network);}
+ [Fact]public void Tibco_metrics_ignore_optional_prometheus_timestamps(){const string text="rv_service_uptime{component=\"rvd\",service=\"7500\"} 125 1715789123123456789\nrv_service_client_connections{component=\"rvd\",service=\"7500\"} 3 1715789123123456789";var metrics=TibRvServerAdapter.ParseMetrics(text,"7500");Assert.Equal(TimeSpan.FromSeconds(125),metrics.Uptime);Assert.Equal(3,metrics.ClientConnections);}
  [Fact]public void Tibco_metrics_reject_a_missing_configured_series(){const string text="rv_service_client_connections{service=\"7600\",network=\"net-b\"} 9";Assert.Throws<InvalidDataException>(()=>TibRvServerAdapter.ParseMetrics(text,"7500","net-a"));}
  [Fact]public void Tibco_fixture_keeps_services_separate(){var text=File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Fixtures","tibrv-multi-service.prom"));var first=TibRvServerAdapter.ParseMetrics(text,"7500","net-a");var second=TibRvServerAdapter.ParseMetrics(text,"7600","net-b");Assert.Equal(3,first.ClientConnections);Assert.Equal(42,first.InMessages);Assert.Equal(9,second.ClientConnections);Assert.Equal(100,second.InMessages);}
 }
