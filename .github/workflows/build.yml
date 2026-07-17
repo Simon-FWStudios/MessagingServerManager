@@ -26,7 +26,7 @@ jobs:
       - name: Test
         run: dotnet test MessagingServerManager.sln --no-restore --configuration Release --verbosity normal
       - name: Restore Windows publish runtime
-        run: dotnet restore src/MessagingServerManager.App/MessagingServerManager.App.csproj --runtime win-x64
+        run: dotnet restore src/MessagingServerManager.App/MessagingServerManager.App.csproj --runtime win-x64 -p:PublishProfile=win-x64
       - name: Publish portable Windows application
         run: dotnet publish src/MessagingServerManager.App/MessagingServerManager.App.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true -p:PublishProfile=win-x64
       - name: Upload Windows artifact
