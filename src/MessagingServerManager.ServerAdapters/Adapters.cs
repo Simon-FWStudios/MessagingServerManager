@@ -252,18 +252,16 @@ public sealed class TibRvServerAdapter : ServerAdapterBase, ITibRvMonitor
     public override ServerType ServerType => ServerType.TibcoRendezvous;
     public string BuildArguments(ServerDefinition d) => BuildArguments(d, new GlobalSettings());
     public string BuildArguments(ServerDefinition d, GlobalSettings settings) => d.LaunchMode == LaunchMode.CustomArguments ? d.AdditionalArguments ?? "" :
-        $"-listen {d.TibRv.ListenHost}:{d.TibRv.ListenPort ?? d.TibRv.Service}" +
+        $"-listen {d.TibRv.ListenHost}:{d.TibRv.ListenPort}" +
         $" -reliability {d.TibRv.ReliabilitySeconds}" +
         (d.TibRv.HttpAdministrationPort is int h ? $" -http {d.TibRv.HttpAdministrationHost}:{h}" : "") +
-        $" -reuse-port {d.TibRv.ReusePort ?? d.TibRv.Service}" +
         (!string.IsNullOrWhiteSpace(d.TibRv.Network) ? $" -network {Q(d.TibRv.Network)}" : "") +
-        (!string.IsNullOrWhiteSpace(d.TibRv.DaemonAddress) ? $" -daemon {Q(d.TibRv.DaemonAddress)}" : "") +
         (!string.IsNullOrWhiteSpace(d.LogFilePath) ? $" -logfile {Q(ResolveLogPath(d, settings))}" : "") +
         (string.IsNullOrWhiteSpace(d.AdditionalArguments) ? "" : " " + d.AdditionalArguments);
     public override ProcessStartInfo BuildStartInfo(ServerDefinition d, GlobalSettings settings) => StartInfo(d, BuildArguments(d, settings));
     public override async Task<ServerHealthResult> CheckHealthAsync(ServerDefinition d, RunningProcessInfo? p, CancellationToken ct)
     {
-        var port = d.TibRv.HttpAdministrationPort ?? d.TibRv.ListenPort ?? d.HealthCheckPort;
+        var port = d.TibRv.HttpAdministrationPort ?? d.TibRv.ListenPort;
         if (p is null && d.Location == ServerLocation.Local) return ServerHealthResult.Unhealthy("Process is not running.");
         if (p is null) return port is int remotePort ? await Tcp.CheckAsync(d.HealthCheckHost, remotePort, TimeSpan.FromSeconds(2), ct) : ServerHealthResult.Unhealthy("No remote reachability port is configured.");
         if (d.TibRv.HttpAdministrationPort is not null) return ServerHealthResult.Healthy("Process is running; HTTP metrics configured.");
@@ -273,7 +271,7 @@ public sealed class TibRvServerAdapter : ServerAdapterBase, ITibRvMonitor
     {
         var port = d.TibRv.HttpAdministrationPort ?? throw new InvalidOperationException("An HTTP administration port is required for TIBCO RV metrics.");
         var raw = await Http.GetStringAsync(new UriBuilder("http", d.HealthCheckHost, port, "metrics").Uri, ct);
-        return ParseMetrics(raw, d.TibRv.Service.ToString(CultureInfo.InvariantCulture), d.TibRv.Network);
+        return ParseMetrics(raw, d.TibRv.ListenPort.ToString(CultureInfo.InvariantCulture), d.TibRv.Network);
     }
     public static TibRvTelemetry ParseMetrics(string raw, string? configuredService = null, string? configuredNetwork = null)
     {

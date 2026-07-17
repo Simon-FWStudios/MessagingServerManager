@@ -52,15 +52,12 @@ public sealed class NatsOptions
 
 public sealed class TibRvOptions
 {
-    public int Service { get; set; } = 7500;
     public string? Network { get; set; }
-    public string? DaemonAddress { get; set; }
     public int? HttpAdministrationPort { get; set; } = 7580;
-    public int? ListenPort { get; set; }
+    public int ListenPort { get; set; } = 7500;
     public string ListenHost { get; set; } = "localhost";
     public string HttpAdministrationHost { get; set; } = "localhost";
     public int ReliabilitySeconds { get; set; } = 60;
-    public int? ReusePort { get; set; }
 }
 
 public sealed class GlobalSettings
@@ -188,7 +185,6 @@ public static class ServerValidator
         if (server.ServerType == ServerType.TibcoRendezvous && server.TibRv.ReliabilitySeconds < 0) errors.Add("TIBCO RV reliability cannot be negative.");
         if (server.ServerType == ServerType.TibcoRendezvous && server.Location == ServerLocation.Local && server.LaunchMode == LaunchMode.ManagedOptions && string.IsNullOrWhiteSpace(server.TibRv.ListenHost)) errors.Add("TIBCO RV listen host is required.");
         if (server.ServerType == ServerType.TibcoRendezvous && server.Location == ServerLocation.Local && server.LaunchMode == LaunchMode.ManagedOptions && server.TibRv.HttpAdministrationPort is not null && string.IsNullOrWhiteSpace(server.TibRv.HttpAdministrationHost)) errors.Add("TIBCO RV HTTP administration host is required.");
-        if (server.TibRv.ReusePort is < 1 or > 65535) errors.Add("TIBCO RV reuse port must be between 1 and 65535.");
         var others = all.Where(x => x.Id != server.Id && x.Location == ServerLocation.Local && server.Location == ServerLocation.Local).SelectMany(GetPorts).Where(x => x.HasValue).Select(x => x!.Value).ToHashSet();
         foreach (var port in ports.Distinct().Where(others.Contains)) errors.Add($"Port {port} is already configured.");
         if (server.Location == ServerLocation.Local && server.LaunchMode == LaunchMode.ConfigFile && string.IsNullOrWhiteSpace(server.ConfigFilePath)) errors.Add("A config file path is required.");
@@ -209,7 +205,7 @@ public static class ServerValidator
     }
     public static IEnumerable<int?> GetPorts(ServerDefinition s) => s.ServerType == ServerType.Nats
         ? new int?[] { s.Nats.ClientPort, s.Nats.MonitoringPort, s.Nats.ClusterPort }
-        : new int?[] { s.TibRv.Service, s.TibRv.HttpAdministrationPort, s.TibRv.ListenPort };
+        : new int?[] { s.TibRv.ListenPort, s.TibRv.HttpAdministrationPort };
 }
 
 public static class CpuUsageCalculator

@@ -40,7 +40,7 @@ The toolbar **Load** and **Save / Export** actions transfer a portable, versione
 
 ## Adding servers
 
-Select **Add Server**, choose the product and launch mode, and complete the common and product-specific fields. NATS supports config-file, managed-options, and custom-arguments modes; telemetry uses `/varz` and readiness uses `/healthz` on the configured HTTP or HTTPS monitoring port. TIBCO RV managed options include service, network, daemon address, HTTP administration port, and listen port; when an HTTP administration port is configured, the application parses its Prometheus-format `/metrics` endpoint.
+Select **Add Server**, choose the product and launch mode, and complete the common and product-specific fields. NATS supports config-file, managed-options, and custom-arguments modes; telemetry uses `/varz` and readiness uses `/healthz` on the configured HTTP or HTTPS monitoring port. TIBCO RV managed options include listen host, listen port, reliability, HTTP administration host/port, and optional network; when an HTTP administration port is configured, the application parses its Prometheus-format `/metrics` endpoint.
 
 Each definition has a **Local** or **Remote** location. Local servers are owned as processes and expose lifecycle and local-log actions. Remote definitions are monitor-only: NATS reads HTTP or HTTPS `/varz`, while TIBCO RV reads the configured HTTP `/metrics` endpoint and selects the configured service/network label set. PID and local lifecycle/log controls remain unavailable. HTTPS uses the system trust store, or an optional PEM CA certificate configured on the server definition.
 
@@ -51,7 +51,7 @@ For a local TLS test environment on client port 4223 and HTTPS monitoring port
 [`docs/NATS-TLS-TESTING.md`](docs/NATS-TLS-TESTING.md) for the exact server and
 client certificate mapping.
 
-`nats-server.exe` and `rvdaemon.exe` may be resolved through `PATH`, or set an explicit executable path. Managed TIBCO RV startup follows `rvdaemon.exe -listen localhost:7500 -reliability 60 -http localhost:7580 -reuse-port 7500`, with each value configurable; the matching repository example is `samples/tibrv/rvdaemon-production.args.txt`. Exact RV flags can vary by installed TIBCO version; verify the sample arguments against your locally installed documentation.
+`nats-server.exe` and `rvdaemon.exe` may be resolved through `PATH`, or set an explicit executable path. Managed TIBCO RV startup follows `rvdaemon.exe -listen localhost:7500 -reliability 60 -http localhost:7580`, with each value configurable; the generated first-run sample is `sample-config/rvdaemon.args.txt`. Exact RV flags can vary by installed TIBCO version; verify the sample arguments against your locally installed documentation.
 
 ## Monitoring and logs
 

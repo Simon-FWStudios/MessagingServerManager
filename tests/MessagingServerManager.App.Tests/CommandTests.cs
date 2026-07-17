@@ -55,6 +55,19 @@ public sealed class CommandTests
     }
 
     [Fact]
+    public void Message_rate_columns_keep_thousands_suffixes_on_both_directions()
+    {
+        var row = new ServerRowViewModel(new ServerDefinition());
+        var sample = DateTimeOffset.UtcNow;
+        row.ApplyTelemetry(new RemoteServerTelemetry("id", "name", "1", 4222, 8222, TimeSpan.FromSeconds(10), 1, 100, 2, 3, 0, 0, 100, 50, 0, 100, 2, 0, 0, 0, "", "", "", sample, true, "{}"));
+        row.ApplyTelemetry(new RemoteServerTelemetry("id", "name", "1", 4222, 8222, TimeSpan.FromSeconds(11), 1, 100, 2, 3, 10000, 10000, 100, 50, 0, 100, 2, 0, 0, 0, "", "", "", sample.AddSeconds(1), true, "{}"));
+
+        Assert.Equal("10k", row.InMessageRateText);
+        Assert.Equal("10k", row.OutMessageRateText);
+        Assert.Equal("↓ 10k  ↑ 10k", row.MessageRateText);
+    }
+
+    [Fact]
     public void Enabling_and_disabling_reconciles_row_status_immediately()
     {
         var definition = new ServerDefinition { Enabled = false };

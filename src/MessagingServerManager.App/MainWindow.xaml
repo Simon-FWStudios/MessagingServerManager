@@ -248,36 +248,48 @@
                 </DataTemplate>
               </DataGridTemplateColumn.CellTemplate>
             </DataGridTemplateColumn>
-            <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="260" MinWidth="155" ElementStyle="{StaticResource CenteredCellText}"/>
-            <DataGridTextColumn Header="Type" Binding="{Binding TypeText}" Width="78" ElementStyle="{StaticResource CenteredCellText}"/>
-            <DataGridTextColumn Header="Location" Binding="{Binding LocationText}" Width="70" ElementStyle="{StaticResource CenteredCellText}"/>
-            <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="58" ElementStyle="{StaticResource CenteredCellText}"/>
-            <DataGridTemplateColumn Header="Port(s)" SortMemberPath="PrimaryPort" Width="98">
+            <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="2*" MinWidth="155" ElementStyle="{StaticResource CenteredCellText}"/>
+            <DataGridTextColumn Header="Type" Binding="{Binding TypeText}" Width="0.8*" MinWidth="78" ElementStyle="{StaticResource CenteredCellText}"/>
+            <DataGridTextColumn Header="Location" Binding="{Binding LocationText}" Width="0.75*" MinWidth="70" ElementStyle="{StaticResource CenteredCellText}"/>
+            <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="0.6*" MinWidth="58" ElementStyle="{StaticResource CenteredCellText}"/>
+            <DataGridTemplateColumn Header="Port(s)" SortMemberPath="PrimaryPort" Width="1*" MinWidth="98">
               <DataGridTemplateColumn.CellTemplate>
                 <DataTemplate>
                   <TextBlock Text="{Binding Ports}" ToolTip="{Binding PortsTooltip}" Style="{StaticResource CenteredCellText}"/>
                 </DataTemplate>
               </DataGridTemplateColumn.CellTemplate>
             </DataGridTemplateColumn>
-            <DataGridTextColumn Header="Uptime" Binding="{Binding UptimeText}" SortMemberPath="Uptime" Width="78" ElementStyle="{StaticResource CenteredCellText}"/>
-            <DataGridTemplateColumn Header="Connections" SortMemberPath="ConnectionCount" Width="92">
+            <DataGridTextColumn Header="Uptime" Binding="{Binding UptimeText}" SortMemberPath="Uptime" Width="0.8*" MinWidth="78" ElementStyle="{StaticResource CenteredCellText}"/>
+            <DataGridTemplateColumn Header="Connections" SortMemberPath="ConnectionCount" Width="1*" MinWidth="92">
               <DataGridTemplateColumn.CellTemplate>
                 <DataTemplate>
                   <TextBlock Text="{Binding ConnectionsText}" ToolTip="{Binding ActivityTooltip}" Style="{StaticResource CenteredCellText}"/>
                 </DataTemplate>
               </DataGridTemplateColumn.CellTemplate>
             </DataGridTemplateColumn>
-            <DataGridTemplateColumn Header="Messages/s" SortMemberPath="MessageRateTotal" Width="126">
+            <DataGridTemplateColumn Header="Messages/s" SortMemberPath="MessageRateTotal" Width="1.45*" MinWidth="154">
               <DataGridTemplateColumn.CellTemplate>
                 <DataTemplate>
-                  <TextBlock Text="{Binding MessageRateText}" ToolTip="{Binding ActivityTooltip}" Style="{StaticResource CenteredCellText}"/>
+                  <Grid ToolTip="{Binding ActivityTooltip}" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="14"/>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="10"/>
+                      <ColumnDefinition Width="14"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="↓" Foreground="#526075" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="1" Text="{Binding InMessageRateText}" Style="{StaticResource CenteredCellText}" TextAlignment="Left"/>
+                    <TextBlock Grid.Column="3" Text="↑" Foreground="#526075" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="4" Text="{Binding OutMessageRateText}" Style="{StaticResource CenteredCellText}" TextAlignment="Left"/>
+                  </Grid>
                 </DataTemplate>
               </DataGridTemplateColumn.CellTemplate>
             </DataGridTemplateColumn>
       <DataGridTemplateColumn Header="Actions" Width="112" CanUserSort="False">
               <DataGridTemplateColumn.CellTemplate>
                 <DataTemplate>
-                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
             <Button Style="{StaticResource CompactActionButton}" Visibility="{Binding CanStart,Converter={StaticResource BooleanToVisibility}}" ToolTip="Start server" AutomationProperties.Name="Start server" Command="{Binding DataContext.StartServerCommand,RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}">
                       <icons:FluentIcon Icon="Play" IconSize="Size20" Foreground="#16803A"/>
                     </Button>
