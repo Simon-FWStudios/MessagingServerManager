@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text.Json;
+using System.Collections.Concurrent;
 using MessagingServerManager.Core;
 
 namespace MessagingServerManager.Infrastructure;
@@ -19,6 +20,7 @@ public sealed class PathResolver
 public sealed class JsonConfigurationStore : IConfigurationStore
 {
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> SaveGates = new(StringComparer.OrdinalIgnoreCase);
     private readonly PathResolver _paths;
     public JsonConfigurationStore(PathResolver paths) { _paths = paths; Directory.CreateDirectory(paths.ConfigurationDirectory); }
     public async Task<T> LoadAsync<T>(string fileName, T fallback, CancellationToken cancellationToken = default)
@@ -26,22 +28,45 @@ public sealed class JsonConfigurationStore : IConfigurationStore
         var path = _paths.Resolve(fileName);
         if (!File.Exists(path)) return fallback;
         var loaded = await TryLoadAsync<T>(path, cancellationToken);
-        if (loaded.Success) return loaded.Value!;
+        if (loaded.Success) return ApplyLoadedMigrations(loaded.Value!);
         var backup = path + ".bak";
         if (File.Exists(backup))
         {
             loaded = await TryLoadAsync<T>(backup, cancellationToken);
-            if (loaded.Success) return loaded.Value!;
+            if (loaded.Success) return ApplyLoadedMigrations(loaded.Value!);
         }
         return fallback;
+    }
+    private static T ApplyLoadedMigrations<T>(T value)
+    {
+        if (value is GlobalSettings settings) ConfigurationMigrations.Apply(settings);
+        var type = value?.GetType();
+        if (type?.IsGenericType == true && type.GetGenericTypeDefinition() == typeof(ConfigurationEnvelope<>))
+        {
+            var property = type.GetProperty(nameof(ConfigurationEnvelope<object>.SchemaVersion))!;
+            var version = (int)property.GetValue(value)!;
+            if (version is < 1 or > ConfigurationMigrations.CurrentSchemaVersion) throw new InvalidDataException($"Unsupported configuration schema version {version}.");
+            property.SetValue(value, ConfigurationMigrations.CurrentSchemaVersion);
+        }
+        return value;
     }
     public async Task SaveAsync<T>(string fileName, T value, CancellationToken cancellationToken = default)
     {
         var path = _paths.Resolve(fileName); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temp = path + ".tmp"; var backup = path + ".bak";
-        await using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
-        { await JsonSerializer.SerializeAsync(stream, value, Options, cancellationToken); await stream.FlushAsync(cancellationToken); }
-        if (File.Exists(path)) File.Replace(temp, path, backup, true); else File.Move(temp, path);
+        var gate = SaveGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp"; var backup = path + ".bak";
+        try
+        {
+            await using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, true))
+            { await JsonSerializer.SerializeAsync(stream, value, Options, cancellationToken); await stream.FlushAsync(cancellationToken); }
+            if (File.Exists(path)) File.Replace(temp, path, backup, true); else File.Move(temp, path);
+        }
+        finally
+        {
+            if (File.Exists(temp)) File.Delete(temp);
+            gate.Release();
+        }
     }
     private static async Task<(bool Success, T? Value)> TryLoadAsync<T>(string path, CancellationToken cancellationToken)
     {
@@ -57,6 +82,7 @@ public sealed class JsonConfigurationStore : IConfigurationStore
 
 public sealed class ConfigurationTransferService
 {
+    public const int CurrentSchemaVersion = 2;
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
     public async Task ExportAsync(string path, PortableConfigurationBundle bundle, CancellationToken cancellationToken = default)
     {
@@ -76,10 +102,64 @@ public sealed class ConfigurationTransferService
         await using var stream = new FileStream(Path.GetFullPath(path), FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
         var bundle = await JsonSerializer.DeserializeAsync<PortableConfigurationBundle>(stream, Options, cancellationToken)
             ?? throw new InvalidDataException("The selected file does not contain a configuration bundle.");
-        if (bundle.SchemaVersion != 1) throw new InvalidDataException($"Unsupported configuration schema version {bundle.SchemaVersion}.");
+        if (bundle.SchemaVersion is < 1 or > CurrentSchemaVersion) throw new InvalidDataException($"Unsupported configuration schema version {bundle.SchemaVersion}.");
         bundle.Settings ??= new GlobalSettings();
         bundle.Servers ??= [];
+        ConfigurationMigrations.Apply(bundle);
         return bundle;
+    }
+}
+
+public static class ConfigurationMigrations
+{
+    public const int CurrentSchemaVersion = 2;
+    public static bool Apply(GlobalSettings settings)
+    {
+        if (settings.SchemaVersion is < 1 or > CurrentSchemaVersion) throw new InvalidDataException($"Unsupported settings schema version {settings.SchemaVersion}.");
+        var changed = settings.SchemaVersion < CurrentSchemaVersion;
+        if (settings.MonitoringLogMaximumBytes <= 0) { settings.MonitoringLogMaximumBytes = 5 * 1024 * 1024; changed = true; }
+        if (settings.MonitoringLogRetainedFiles < 1) { settings.MonitoringLogRetainedFiles = 3; changed = true; }
+        settings.SchemaVersion = CurrentSchemaVersion;
+        return changed;
+    }
+    public static bool Apply<T>(ConfigurationEnvelope<T> envelope)
+    {
+        if (envelope.SchemaVersion is < 1 or > CurrentSchemaVersion) throw new InvalidDataException($"Unsupported configuration schema version {envelope.SchemaVersion}.");
+        var changed = envelope.SchemaVersion < CurrentSchemaVersion;
+        envelope.SchemaVersion = CurrentSchemaVersion;
+        return changed;
+    }
+    public static void Apply(PortableConfigurationBundle bundle)
+    {
+        ConfigurationMigrations.Apply(bundle.Settings);
+        bundle.SchemaVersion = CurrentSchemaVersion;
+    }
+}
+
+public sealed class RotatingTextLog
+{
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    public async Task AppendLineAsync(string path, string line, long maximumBytes, int retainedFiles, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            if (File.Exists(path) && new FileInfo(path).Length >= Math.Max(1024, maximumBytes)) Rotate(path, Math.Max(1, retainedFiles));
+            await File.AppendAllTextAsync(path, line + Environment.NewLine, ct);
+        }
+        finally { _gate.Release(); }
+    }
+    private static void Rotate(string path, int retainedFiles)
+    {
+        var oldest = path + "." + retainedFiles;
+        if (File.Exists(oldest)) File.Delete(oldest);
+        for (var index = retainedFiles - 1; index >= 1; index--)
+        {
+            var source = path + "." + index;
+            if (File.Exists(source)) File.Move(source, path + "." + (index + 1), true);
+        }
+        File.Move(path, path + ".1", true);
     }
 }
 
@@ -127,8 +207,10 @@ public sealed class ProcessManager : IDisposable
 {
     private readonly object _gate = new();
     private readonly Dictionary<Guid, ManagedProcess> _processes = [];
+    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _operationGates = new();
     private readonly Dictionary<ServerType, IServerAdapter> _adapters;
     private readonly GlobalSettings _settings;
+    private volatile bool _disposed;
     public event Action<Guid, int?>? ProcessExited;
     public ProcessManager(IEnumerable<IServerAdapter> adapters, GlobalSettings settings) { _adapters = adapters.ToDictionary(x => x.ServerType); _settings = settings; }
     public ManagedProcess? Get(Guid id) { lock (_gate) return _processes.GetValueOrDefault(id); }
@@ -139,18 +221,25 @@ public sealed class ProcessManager : IDisposable
         {
             var process = Process.GetProcessById(state.ProcessId);
             if (!new ProcessIdentity().Matches(process, state) || !_adapters[server.ServerType].MatchesProcess(server, process)) { process.Dispose(); return false; }
-            process.EnableRaisingEvents = true;
             var managed = new ManagedProcess(process) { PreviousCpu = process.TotalProcessorTime };
-            process.Exited += (_, _) => HandleExited(server.Id, managed);
             lock (_gate)
             {
                 if (_processes.ContainsKey(server.Id)) { managed.Dispose(); return false; }
                 _processes[server.Id] = managed;
+                process.Exited += (_, _) => HandleExited(server.Id, managed);
+                process.EnableRaisingEvents = true;
             }
             if (process.HasExited) { HandleExited(server.Id, managed); return false; }
             return true;
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or ObjectDisposedException)
+        {
+            lock (_gate)
+            {
+                if (_processes.TryGetValue(server.Id, out var registered)) { _processes.Remove(server.Id); registered.Dispose(); }
+            }
+            return false;
+        }
     }
     public IReadOnlyList<RuntimeProcessState> GetRuntimeStates()
     {
@@ -171,8 +260,18 @@ public sealed class ProcessManager : IDisposable
     }
     public async Task StartAsync(ServerDefinition server, CancellationToken ct = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var operationGate = _operationGates.GetOrAdd(server.Id, _ => new SemaphoreSlim(1, 1));
+        await operationGate.WaitAsync(ct);
+        try { await StartCoreAsync(server, ct); }
+        finally { operationGate.Release(); }
+    }
+    private async Task StartCoreAsync(ServerDefinition server, CancellationToken ct)
+    {
         lock (_gate) { if (_processes.ContainsKey(server.Id)) return; }
-        var process = new Process { StartInfo = _adapters[server.ServerType].BuildStartInfo(server, _settings), EnableRaisingEvents = true };
+        var adapter = _adapters[server.ServerType];
+        await adapter.PrepareAsync(server, _settings, ct);
+        var process = new Process { StartInfo = adapter.BuildStartInfo(server, _settings), EnableRaisingEvents = true };
         var managed = new ManagedProcess(process);
         process.Exited += (_, _) => HandleExited(server.Id, managed);
         try
@@ -196,6 +295,14 @@ public sealed class ProcessManager : IDisposable
     }
     public async Task<StopResult> StopAsync(ServerDefinition server, CancellationToken ct = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var operationGate = _operationGates.GetOrAdd(server.Id, _ => new SemaphoreSlim(1, 1));
+        await operationGate.WaitAsync(ct);
+        try { return await StopCoreAsync(server, ct); }
+        finally { operationGate.Release(); }
+    }
+    private async Task<StopResult> StopCoreAsync(ServerDefinition server, CancellationToken ct)
+    {
         ManagedProcess? managed;
         lock (_gate) managed = _processes.GetValueOrDefault(server.Id);
         if (managed is null) return new(true, false);
@@ -203,7 +310,20 @@ public sealed class ProcessManager : IDisposable
         if (result.Stopped) await managed.ExitCompletion.Task.WaitAsync(TimeSpan.FromSeconds(Math.Max(2, server.GracefulStopTimeoutSeconds + 2)), ct);
         return result;
     }
-    public async Task RestartAsync(ServerDefinition server, CancellationToken ct = default) { await StopAsync(server, ct); await Task.Delay(250, ct); await StartAsync(server, ct); }
+    public async Task RestartAsync(ServerDefinition server, CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var operationGate = _operationGates.GetOrAdd(server.Id, _ => new SemaphoreSlim(1, 1));
+        await operationGate.WaitAsync(ct);
+        try
+        {
+            var stopped = await StopCoreAsync(server, ct);
+            if (!stopped.Stopped) throw new InvalidOperationException(stopped.Error ?? "The server could not be stopped for restart.");
+            await Task.Delay(250, ct);
+            await StartCoreAsync(server, ct);
+        }
+        finally { operationGate.Release(); }
+    }
     private void HandleExited(Guid serverId, ManagedProcess managed)
     {
         int? code = null;
@@ -219,9 +339,12 @@ public sealed class ProcessManager : IDisposable
     }
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         List<ManagedProcess> owned;
         lock (_gate) { owned = _processes.Values.ToList(); _processes.Clear(); }
         foreach (var process in owned) process.Dispose();
+        _operationGates.Clear();
     }
 }
 

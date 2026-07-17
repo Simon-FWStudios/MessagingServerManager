@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-and-publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore
+        run: dotnet restore MessagingServerManager.sln
+      - name: Install NATS Server for integration tests
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/nats-io/nats-server/releases/download/v2.14.3/nats-server-v2.14.3-windows-amd64.zip -OutFile $env:RUNNER_TEMP\nats-server.zip
+          Expand-Archive $env:RUNNER_TEMP\nats-server.zip -DestinationPath $env:RUNNER_TEMP\nats-server
+          $nats = Get-ChildItem $env:RUNNER_TEMP\nats-server -Recurse -Filter nats-server.exe | Select-Object -First 1 -ExpandProperty FullName
+          "NATS_SERVER_PATH=$nats" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Test
+        run: dotnet test MessagingServerManager.sln --no-restore --configuration Release --verbosity normal
+      - name: Publish portable Windows application
+        run: dotnet publish src/MessagingServerManager.App/MessagingServerManager.App.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true -p:PublishProfile=win-x64
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MessagingServerManager-win-x64
+          path: src/MessagingServerManager.App/bin/Release/publish/win-x64/
+          if-no-files-found: error

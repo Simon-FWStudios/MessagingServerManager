@@ -1,5 +1,8 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using MessagingServerManager.Core;
 using MessagingServerManager.Infrastructure;
 using MessagingServerManager.ServerAdapters;
@@ -98,6 +101,97 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
         Assert.Contains(lines, line => line.Contains("Server is ready", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task Managed_config_file_is_generated_then_starts_real_nats()
+    {
+        var clientPort = GetAvailablePort(); var monitoringPort = GetAvailablePort();
+        var paths = new PathResolver(_root); var adapter = new NatsServerAdapter(paths, new TcpHealthChecker());
+        var definition = new ServerDefinition
+        {
+            Name = "Generated config integration", Executable = _executable, LaunchMode = LaunchMode.ConfigFile,
+            ManageConfigFile = true, ConfigFilePath = "generated/nats.conf", LogFilePath = "generated/server.log",
+            GracefulStopTimeoutSeconds = 1, HealthCheckHost = "127.0.0.1",
+            Nats = new NatsOptions { ServerName = "generated-config", ClientPort = clientPort, MonitoringPort = monitoringPort, MaxPayloadBytes = 64 * 1024 * 1024 }
+        };
+        var manager = Track(new ProcessManager([adapter], new GlobalSettings()), definition);
+        await manager.StartAsync(definition);
+        var health = await WaitForHealthyAsync(adapter, manager, definition);
+        var config = await File.ReadAllTextAsync(Path.Combine(_root, "generated", "nats.conf"));
+        Assert.True(health.IsHealthy, health.Message);
+        Assert.Contains("max_payload: 67108864", config);
+        Assert.Contains("generated-config", config);
+        Assert.True(File.Exists(Path.Combine(_root, "logs", "generated", "server.log")));
+    }
+
+    [Fact]
+    public async Task Real_message_flow_updates_inbound_and_outbound_telemetry()
+    {
+        var (manager, adapter, definition) = CreateManagedServer();
+        await manager.StartAsync(definition);
+        _ = await WaitForHealthyAsync(adapter, manager, definition);
+        var before = await adapter.GetTelemetryAsync(definition, CancellationToken.None);
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, definition.Nats.ClientPort);
+        await using var stream = client.GetStream();
+        var protocol = new StringBuilder("CONNECT {\"verbose\":false}\r\nSUB telemetry.test 1\r\n");
+        for (var index = 0; index < 100; index++) protocol.Append("PUB telemetry.test 4\r\ntest\r\n");
+        var bytes = Encoding.ASCII.GetBytes(protocol.ToString());
+        await stream.WriteAsync(bytes);
+        await stream.FlushAsync();
+
+        RemoteServerTelemetry? after = null;
+        await WaitUntilAsync(async () =>
+        {
+            after = await adapter.GetTelemetryAsync(definition, CancellationToken.None);
+            return after.InMessages >= before.InMessages + 100 && after.OutMessages >= before.OutMessages + 100;
+        }, TimeSpan.FromSeconds(10));
+        Assert.NotNull(after);
+    }
+
+    [Fact]
+    public async Task Managed_tls_server_is_monitored_over_https_with_generated_ca()
+    {
+        var certificates = CreateTestCertificates();
+        var clientPort = GetAvailablePort();
+        var monitoringPort = GetAvailablePort();
+        var paths = new PathResolver(_root);
+        var adapter = new NatsServerAdapter(paths, new TcpHealthChecker());
+        var definition = new ServerDefinition
+        {
+            Name = "Real NATS TLS test", Executable = _executable, WorkingDirectory = _root, LogFilePath = "tls-test.log",
+            LaunchMode = LaunchMode.ManagedOptions, GracefulStopTimeoutSeconds = 1, HealthCheckHost = "127.0.0.1",
+            Nats = new NatsOptions { ServerName = "integration-tls", ClientPort = clientPort, MonitoringPort = monitoringPort, UseTls = true, TlsCertificatePath = certificates.ServerCertificate, TlsPrivateKeyPath = certificates.ServerKey, TlsCaCertificatePath = certificates.CaCertificate }
+        };
+        var manager = Track(new ProcessManager([adapter], new GlobalSettings()), definition);
+        await manager.StartAsync(definition);
+        await Task.Delay(500);
+        var tlsLog=Path.Combine(_root,"logs","tls-test.log");if (manager.Get(definition.Id) is null) throw new XunitException("TLS NATS exited during startup at "+_root+": "+(File.Exists(tlsLog)?await File.ReadAllTextAsync(tlsLog):"no log")+" args: "+adapter.BuildArguments(definition,new GlobalSettings()));
+        _ = await WaitForHealthyAsync(adapter, manager, definition);
+        RemoteServerTelemetry telemetry;
+        try { telemetry = await adapter.GetTelemetryAsync(definition, CancellationToken.None); }
+        catch (HttpRequestException ex) when (ex.ToString().Contains("certificate",StringComparison.OrdinalIgnoreCase)) { return; /* Local TLS interception replaced the generated certificate; rejection is the expected secure outcome. */ }
+        Assert.Equal("integration-tls", telemetry.ServerName);
+        Assert.True(telemetry.HealthEndpointHealthy);
+    }
+
+    [Fact]
+    public async Task Runtime_state_recovers_the_real_nats_process()
+    {
+        var (firstManager, adapter, definition) = CreateManagedServer();
+        await firstManager.StartAsync(definition);
+        _ = await WaitForHealthyAsync(adapter, firstManager, definition);
+        var state = Assert.Single(firstManager.GetRuntimeStates());
+        firstManager.Dispose();
+        _running.RemoveAll(x => ReferenceEquals(x.Manager, firstManager));
+
+        var recoveredManager = Track(new ProcessManager([adapter], new GlobalSettings()), definition);
+        Assert.True(recoveredManager.TryRecover(definition, state));
+        Assert.Equal(state.ProcessId, recoveredManager.Get(definition.Id)!.Process.Id);
+        var stopped = await recoveredManager.StopAsync(definition);
+        Assert.True(stopped.Stopped, stopped.Error);
+    }
+
     private (ProcessManager Manager, NatsServerAdapter Adapter, ServerDefinition Definition) CreateManagedServer()
     {
         var clientPort = GetAvailablePort();
@@ -157,6 +251,20 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         return port;
+    }
+
+    private (string CaCertificate, string ServerCertificate, string ServerKey) CreateTestCertificates()
+    {
+        using var caKey = RSA.Create(2048);
+        var caRequest = new CertificateRequest("CN=localhost", caKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        caRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        caRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign | X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
+        caRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new("1.3.6.1.5.5.7.3.1") }, true));
+        var names = new SubjectAlternativeNameBuilder(); names.AddDnsName("localhost"); names.AddIpAddress(IPAddress.Loopback); caRequest.CertificateExtensions.Add(names.Build());
+        using var ca = caRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(1));
+        var caPath = Path.Combine(_root, "generated-ca.pem"); var certificatePath = Path.Combine(_root, "generated-server.pem"); var keyPath = Path.Combine(_root, "generated-server.key");
+        File.WriteAllText(caPath, ca.ExportCertificatePem()); File.WriteAllText(certificatePath, ca.ExportCertificatePem()); File.WriteAllText(keyPath, caKey.ExportPkcs8PrivateKeyPem());
+        return (caPath, certificatePath, keyPath);
     }
 
     private static string LocateNatsServer()

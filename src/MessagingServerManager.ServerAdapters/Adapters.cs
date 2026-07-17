@@ -16,6 +16,11 @@ public abstract class ServerAdapterBase : IServerAdapter
     protected ServerAdapterBase(PathResolver paths, TcpHealthChecker tcp) { Paths = paths; Tcp = tcp; }
     public abstract ServerType ServerType { get; }
     public abstract ProcessStartInfo BuildStartInfo(ServerDefinition definition, GlobalSettings settings);
+    public virtual Task PrepareAsync(ServerDefinition definition, GlobalSettings settings, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(definition.LogFilePath)) _ = ResolveLogPath(definition, settings);
+        return Task.CompletedTask;
+    }
     public abstract Task<ServerHealthResult> CheckHealthAsync(ServerDefinition definition, RunningProcessInfo? process, CancellationToken cancellationToken);
     public virtual bool MatchesProcess(ServerDefinition definition, Process process) => ProcessIdentity.ExecutableMatches(process, definition.Executable);
     public virtual async Task<StopResult> StopAsync(ServerDefinition definition, RunningProcessInfo processInfo, CancellationToken cancellationToken)
@@ -39,6 +44,12 @@ public abstract class ServerAdapterBase : IServerAdapter
         UseShellExecute = false, CreateNoWindow = true
     };
     protected static string Q(string value) => $"\"{value.Replace("\"", "\\\"")}\"";
+    protected string ResolveLogPath(ServerDefinition d, GlobalSettings settings)
+    {
+        var path = Path.IsPathRooted(Environment.ExpandEnvironmentVariables(d.LogFilePath!)) ? Paths.Resolve(d.LogFilePath!) : Paths.Resolve(Path.Combine(settings.LoggingRootDirectory, d.LogFilePath!));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        return path;
+    }
 }
 
 public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
@@ -66,7 +77,49 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
         return arguments;
     }
     private static string Extra(ServerDefinition d) => string.IsNullOrWhiteSpace(d.AdditionalArguments) ? "" : " " + d.AdditionalArguments;
-    public override ProcessStartInfo BuildStartInfo(ServerDefinition d, GlobalSettings settings) => StartInfo(d, BuildArguments(d, settings));
+    public override ProcessStartInfo BuildStartInfo(ServerDefinition d, GlobalSettings settings)
+    {
+        var startInfo = StartInfo(d, BuildArguments(d, settings));
+        if (d.LaunchMode == LaunchMode.ConfigFile && string.IsNullOrWhiteSpace(d.WorkingDirectory)) startInfo.WorkingDirectory = Path.GetDirectoryName(Paths.Resolve(d.ConfigFilePath!))!;
+        return startInfo;
+    }
+    public override async Task PrepareAsync(ServerDefinition d, GlobalSettings settings, CancellationToken ct)
+    {
+        await base.PrepareAsync(d, settings, ct);
+        if (d.Location != ServerLocation.Local || d.LaunchMode != LaunchMode.ConfigFile) return;
+        var path = Paths.Resolve(d.ConfigFilePath!); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        if (!d.ManageConfigFile)
+        {
+            if (File.Exists(path)) EnsureExternalConfigLogDirectory(path);
+            return;
+        }
+        var lines = new List<string> { $"server_name: {Yaml(d.Nats.ServerName ?? d.Name)}", $"port: {d.Nats.ClientPort}", $"max_payload: {d.Nats.MaxPayloadBytes}" };
+        if (d.Nats.MonitoringPort is int monitoringPort) lines.Add($"{(d.Nats.UseTls ? "https" : "http")}: {monitoringPort}");
+        if (d.Nats.ClusterPort is int clusterPort) lines.Add($"cluster {{ listen: nats://0.0.0.0:{clusterPort} }}");
+        if (!string.IsNullOrWhiteSpace(d.Nats.StoreDirectory)) lines.Add($"jetstream {{ store_dir: {Yaml(Paths.Resolve(d.Nats.StoreDirectory))} }}");
+        if (!string.IsNullOrWhiteSpace(d.LogFilePath)) lines.Add($"log_file: {Yaml(ResolveLogPath(d, settings))}");
+        if (d.Nats.UseTls)
+        {
+            lines.Add("tls {"); lines.Add($"  cert_file: {Yaml(Paths.Resolve(d.Nats.TlsCertificatePath!))}"); lines.Add($"  key_file: {Yaml(Paths.Resolve(d.Nats.TlsPrivateKeyPath!))}");
+            if (!string.IsNullOrWhiteSpace(d.Nats.TlsCaCertificatePath)) lines.Add($"  ca_file: {Yaml(Paths.Resolve(d.Nats.TlsCaCertificatePath))}");
+            lines.Add($"  verify: {d.Nats.TlsVerifyClients.ToString().ToLowerInvariant()}"); lines.Add("}");
+        }
+        if (!string.IsNullOrWhiteSpace(d.AdditionalArguments)) lines.AddRange(d.AdditionalArguments.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries));
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try { await File.WriteAllLinesAsync(temporary, lines, ct); File.Move(temporary, path, true); }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+    private static void EnsureExternalConfigLogDirectory(string configPath)
+    {
+        var entry = File.ReadLines(configPath).Select(line => line.Trim()).FirstOrDefault(line => line.StartsWith("log_file", StringComparison.OrdinalIgnoreCase));
+        if (entry is null) return;
+        var separator = entry.IndexOf(':'); if (separator < 0) return;
+        var configured = entry[(separator + 1)..].Trim().Trim('"', '\''); if (configured.Length == 0) return;
+        var expanded = Environment.ExpandEnvironmentVariables(configured);
+        var resolved = Path.GetFullPath(Path.IsPathRooted(expanded) ? expanded : Path.Combine(Path.GetDirectoryName(configPath)!, expanded));
+        Directory.CreateDirectory(Path.GetDirectoryName(resolved)!);
+    }
+    private static string Yaml(string value) => JsonSerializer.Serialize(value);
     public override async Task<StopResult> StopAsync(ServerDefinition definition, RunningProcessInfo processInfo, CancellationToken cancellationToken)
     {
         try
@@ -101,14 +154,12 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
         var endpoint = GetMonitoringUri(d);
         using var customClient = CreateCustomCaClient(d);
         var client = customClient ?? _http;
-        using var response = await client.GetAsync(endpoint, ct);
-        response.EnsureSuccessStatusCode();
-        var rawJson = await response.Content.ReadAsStringAsync(ct);
+        var rawJson = await GetStringWithRetryAsync(client, endpoint, ct);
         using var document = JsonDocument.Parse(rawJson);
         var root = document.RootElement;
         var start = Date(root, "start"); var now = Date(root, "now");
         var uptime = start.HasValue && now.HasValue ? now.Value - start.Value : TimeSpan.Zero;
-        using var healthResponse = await client.GetAsync(GetMonitoringUri(d, "healthz"), ct);
+        var healthEndpointHealthy = await CheckHealthEndpointAsync(client, GetMonitoringUri(d, "healthz"), ct);
         var clusterName = root.TryGetProperty("cluster", out var cluster) && cluster.ValueKind == JsonValueKind.Object ? String(cluster, "name") : "";
         var tags = root.TryGetProperty("server_tags", out var tagValues) && tagValues.ValueKind == JsonValueKind.Array ? string.Join(", ", tagValues.EnumerateArray().Select(x => x.GetString()).Where(x => !string.IsNullOrWhiteSpace(x))) : "";
         var metadata = root.TryGetProperty("server_metadata", out var metadataValue) && metadataValue.ValueKind == JsonValueKind.Object ? metadataValue.GetRawText() : "";
@@ -118,8 +169,32 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
             Double(root, "cpu"), Long(root, "mem"), Int(root, "connections"), Int(root, "subscriptions"),
             Long(root, "in_msgs"), Long(root, "out_msgs"), Long(root, "in_bytes"), Long(root, "out_bytes"), Int(root, "slow_consumers"),
             Int(root, "max_connections"), Int(root, "total_connections"), Int(root, "routes"), Int(root, "remotes"), Int(root, "leafnodes"),
-            clusterName, tags, metadata, now ?? DateTimeOffset.UtcNow, healthResponse.IsSuccessStatusCode,
+            clusterName, tags, metadata, now ?? DateTimeOffset.UtcNow, healthEndpointHealthy,
             JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true }));
+    }
+    private static async Task<string> GetStringWithRetryAsync(HttpClient client, Uri endpoint, CancellationToken ct)
+    {
+        Exception? failure = null;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                using var response = await client.GetAsync(endpoint, ct);
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsStringAsync(ct);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+            {
+                failure = ex;
+                if (attempt == 0) await Task.Delay(200, ct);
+            }
+        }
+        throw new HttpRequestException($"Telemetry request failed after retry: {failure?.Message}", failure);
+    }
+    private static async Task<bool> CheckHealthEndpointAsync(HttpClient client, Uri endpoint, CancellationToken ct)
+    {
+        try { using var response = await client.GetAsync(endpoint, ct); return response.IsSuccessStatusCode; }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested) { return false; }
     }
     public static Uri GetMonitoringUri(ServerDefinition definition)
         => GetMonitoringUri(definition, "varz");
@@ -136,12 +211,14 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
         handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
         {
             if (certificate is null) return false;
+            var serverCertificate = new X509Certificate2(certificate);
+            if (serverCertificate.RawData.AsSpan().SequenceEqual(ca.RawData)) return true;
             if ((errors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0) return false;
             using var chain = new X509Chain();
             chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
             chain.ChainPolicy.CustomTrustStore.Add(ca);
             chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-            return chain.Build(new X509Certificate2(certificate));
+            return chain.Build(serverCertificate);
         };
         return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(2) };
     }
@@ -150,12 +227,6 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
     private static long Long(JsonElement root, string name) => root.TryGetProperty(name, out var value) && value.TryGetInt64(out var result) ? result : 0;
     private static double Double(JsonElement root, string name) => root.TryGetProperty(name, out var value) && value.TryGetDouble(out var result) ? result : 0;
     private static DateTimeOffset? Date(JsonElement root, string name) => root.TryGetProperty(name, out var value) && value.TryGetDateTimeOffset(out var result) ? result : null;
-    private string ResolveLogPath(ServerDefinition d, GlobalSettings settings)
-    {
-        var path = Path.IsPathRooted(Environment.ExpandEnvironmentVariables(d.LogFilePath!)) ? Paths.Resolve(d.LogFilePath!) : Paths.Resolve(Path.Combine(settings.LoggingRootDirectory, d.LogFilePath!));
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        return path;
-    }
 }
 
 public sealed class TibRvServerAdapter : ServerAdapterBase, ITibRvMonitor
@@ -165,17 +236,20 @@ public sealed class TibRvServerAdapter : ServerAdapterBase, ITibRvMonitor
     public override ServerType ServerType => ServerType.TibcoRendezvous;
     public string BuildArguments(ServerDefinition d) => BuildArguments(d, new GlobalSettings());
     public string BuildArguments(ServerDefinition d, GlobalSettings settings) => d.LaunchMode == LaunchMode.CustomArguments ? d.AdditionalArguments ?? "" :
-        $"-service {d.TibRv.Service}" +
+        $"-listen {d.TibRv.ListenHost}:{d.TibRv.ListenPort ?? d.TibRv.Service}" +
+        $" -reliability {d.TibRv.ReliabilitySeconds}" +
+        (d.TibRv.HttpAdministrationPort is int h ? $" -http {d.TibRv.HttpAdministrationHost}:{h}" : "") +
+        $" -reuse-port {d.TibRv.ReusePort ?? d.TibRv.Service}" +
         (!string.IsNullOrWhiteSpace(d.TibRv.Network) ? $" -network {Q(d.TibRv.Network)}" : "") +
         (!string.IsNullOrWhiteSpace(d.TibRv.DaemonAddress) ? $" -daemon {Q(d.TibRv.DaemonAddress)}" : "") +
-        (d.TibRv.HttpAdministrationPort is int h ? $" -http {h}" : "") +
         (!string.IsNullOrWhiteSpace(d.LogFilePath) ? $" -logfile {Q(ResolveLogPath(d, settings))}" : "") +
         (string.IsNullOrWhiteSpace(d.AdditionalArguments) ? "" : " " + d.AdditionalArguments);
     public override ProcessStartInfo BuildStartInfo(ServerDefinition d, GlobalSettings settings) => StartInfo(d, BuildArguments(d, settings));
     public override async Task<ServerHealthResult> CheckHealthAsync(ServerDefinition d, RunningProcessInfo? p, CancellationToken ct)
     {
-        if (p is null) return ServerHealthResult.Unhealthy("Process is not running.");
         var port = d.TibRv.HttpAdministrationPort ?? d.TibRv.ListenPort ?? d.HealthCheckPort;
+        if (p is null && d.Location == ServerLocation.Local) return ServerHealthResult.Unhealthy("Process is not running.");
+        if (p is null) return port is int remotePort ? await Tcp.CheckAsync(d.HealthCheckHost, remotePort, TimeSpan.FromSeconds(2), ct) : ServerHealthResult.Unhealthy("No remote reachability port is configured.");
         if (d.TibRv.HttpAdministrationPort is not null) return ServerHealthResult.Healthy("Process is running; HTTP metrics configured.");
         return port is int value ? await Tcp.CheckAsync(d.HealthCheckHost, value, TimeSpan.FromSeconds(2), ct) : ServerHealthResult.Healthy("Process is running.");
     }
@@ -183,31 +257,35 @@ public sealed class TibRvServerAdapter : ServerAdapterBase, ITibRvMonitor
     {
         var port = d.TibRv.HttpAdministrationPort ?? throw new InvalidOperationException("An HTTP administration port is required for TIBCO RV metrics.");
         var raw = await Http.GetStringAsync(new UriBuilder("http", d.HealthCheckHost, port, "metrics").Uri, ct);
-        return ParseMetrics(raw);
+        return ParseMetrics(raw, d.TibRv.Service.ToString(CultureInfo.InvariantCulture), d.TibRv.Network);
     }
-    public static TibRvTelemetry ParseMetrics(string raw)
+    public static TibRvTelemetry ParseMetrics(string raw, string? configuredService = null, string? configuredNetwork = null)
     {
-        var values = new Dictionary<string, double>(StringComparer.Ordinal);
-        var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var samples = new List<(string Name, double Value, Dictionary<string, string> Labels)>();
         foreach (var source in raw.Split('\n'))
         {
             var line = source.Trim(); if (line.Length == 0 || line[0] == '#') continue;
             var separator = line.LastIndexOfAny([' ', '\t']); if (separator <= 0 || !double.TryParse(line[(separator + 1)..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value)) continue;
             var descriptor = line[..separator]; var brace = descriptor.IndexOf('{'); var name = brace >= 0 ? descriptor[..brace] : descriptor;
-            values[name] = values.GetValueOrDefault(name) + value;
-            if (labels.Count == 0 && brace >= 0 && descriptor.EndsWith('}')) foreach (var pair in descriptor[(brace + 1)..^1].Split(',')) { var equals = pair.IndexOf('='); if (equals > 0) labels[pair[..equals].Trim()] = pair[(equals + 1)..].Trim().Trim('"'); }
+            var sampleLabels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (brace >= 0 && descriptor.EndsWith('}')) foreach (var pair in descriptor[(brace + 1)..^1].Split(',')) { var equals = pair.IndexOf('='); if (equals > 0) sampleLabels[pair[..equals].Trim()] = pair[(equals + 1)..].Trim().Trim('"'); }
+            samples.Add((name, value, sampleLabels));
         }
+        var labels = samples.Select(x => x.Labels).FirstOrDefault(x =>
+            (string.IsNullOrWhiteSpace(configuredService) || x.GetValueOrDefault("service") == configuredService) &&
+            (string.IsNullOrWhiteSpace(configuredNetwork) || x.GetValueOrDefault("network") == configuredNetwork));
+        if (labels is null && (!string.IsNullOrWhiteSpace(configuredService) && samples.Any(x => x.Labels.ContainsKey("service")) || !string.IsNullOrWhiteSpace(configuredNetwork) && samples.Any(x => x.Labels.ContainsKey("network"))))
+            throw new InvalidDataException("TIBCO RV metrics do not contain the configured service/network label set.");
+        labels ??= samples.Select(x => x.Labels).FirstOrDefault(x => x.Count > 0) ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        bool Selected(Dictionary<string, string> candidate) => candidate.Count == 0 ||
+            (!labels.TryGetValue("service", out var service) || candidate.GetValueOrDefault("service") == service) &&
+            (!labels.TryGetValue("network", out var network) || candidate.GetValueOrDefault("network") == network);
+        var values = samples.Where(x => Selected(x.Labels)).GroupBy(x => x.Name, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Sum(y => y.Value), StringComparer.Ordinal);
         double Metric(string name) => values.GetValueOrDefault(name);
         string Label(string name) => labels.GetValueOrDefault(name, "");
         return new(TimeSpan.FromSeconds(Metric("rv_service_uptime")), (int)Metric("rv_service_client_connections"), (int)Metric("rv_service_subscriptions"),
             (long)Metric("rv_service_inbound_messages_total"), (long)Metric("rv_service_outbound_messages_total"), (long)Metric("rv_service_inbound_bytes_total"), (long)Metric("rv_service_outbound_bytes_total"),
             (long)Metric("rv_service_inbound_packets_total"), (long)Metric("rv_service_outbound_packets_total"), (long)Metric("rv_service_inbound_dataloss_total"), (long)Metric("rv_service_outbound_dataloss_total"),
             (long)Metric("rv_service_packets_retransmitted_total"), (long)Metric("rv_service_packets_missed_total"), Label("component"), Label("version"), Label("host"), Label("service"), Label("network"), DateTimeOffset.UtcNow, raw);
-    }
-    private string ResolveLogPath(ServerDefinition d, GlobalSettings settings)
-    {
-        var path = Path.IsPathRooted(Environment.ExpandEnvironmentVariables(d.LogFilePath!)) ? Paths.Resolve(d.LogFilePath!) : Paths.Resolve(Path.Combine(settings.LoggingRootDirectory, d.LogFilePath!));
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        return path;
     }
 }

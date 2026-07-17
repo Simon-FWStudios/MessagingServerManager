@@ -18,6 +18,7 @@ public sealed class ServerDefinition
     public string? WorkingDirectory { get; set; }
     public LaunchMode LaunchMode { get; set; } = LaunchMode.ManagedOptions;
     public string? ConfigFilePath { get; set; }
+    public bool ManageConfigFile { get; set; }
     public string? AdditionalArguments { get; set; }
     public string? LogFilePath { get; set; }
     public string HealthCheckHost { get; set; } = "localhost";
@@ -38,6 +39,7 @@ public sealed class NatsOptions
     public int ClientPort { get; set; } = 4222;
     public int? MonitoringPort { get; set; } = 8222;
     public int? ClusterPort { get; set; }
+    public int MaxPayloadBytes { get; set; } = 64 * 1024 * 1024;
     public string? StoreDirectory { get; set; }
     public bool UseTls { get; set; }
     public string? TlsCertificatePath { get; set; }
@@ -53,11 +55,15 @@ public sealed class TibRvOptions
     public string? DaemonAddress { get; set; }
     public int? HttpAdministrationPort { get; set; } = 7580;
     public int? ListenPort { get; set; }
+    public string ListenHost { get; set; } = "localhost";
+    public string HttpAdministrationHost { get; set; } = "localhost";
+    public int ReliabilitySeconds { get; set; } = 60;
+    public int? ReusePort { get; set; }
 }
 
 public sealed class GlobalSettings
 {
-    public int SchemaVersion { get; set; } = 1;
+    public int SchemaVersion { get; set; } = 2;
     public string LoggingRootDirectory { get; set; } = "logs";
     public int MonitoringIntervalSeconds { get; set; } = 3;
     public int DefaultGracefulStopTimeoutSeconds { get; set; } = 10;
@@ -65,17 +71,19 @@ public sealed class GlobalSettings
     public bool ConfirmForceKill { get; set; } = true;
     public int MaximumLogLines { get; set; } = 1000;
     public bool AutoStartEnabledServers { get; set; }
+    public long MonitoringLogMaximumBytes { get; set; } = 5 * 1024 * 1024;
+    public int MonitoringLogRetainedFiles { get; set; } = 3;
 }
 
 public sealed class ConfigurationEnvelope<T>
 {
-    public int SchemaVersion { get; set; } = 1;
+    public int SchemaVersion { get; set; } = 2;
     public T Data { get; set; } = default!;
 }
 
 public sealed class PortableConfigurationBundle
 {
-    public int SchemaVersion { get; set; } = 1;
+    public int SchemaVersion { get; set; } = 2;
     public DateTime ExportedAtUtc { get; set; } = DateTime.UtcNow;
     public GlobalSettings Settings { get; set; } = new();
     public List<ServerDefinition> Servers { get; set; } = [];
@@ -122,6 +130,8 @@ public interface IServerAdapter
     ServerType ServerType { get; }
     /// <summary>Builds the effective process start information for a server definition.</summary>
     ProcessStartInfo BuildStartInfo(ServerDefinition definition, GlobalSettings settings);
+    /// <summary>Creates required directories and generated launch files immediately before process start.</summary>
+    Task PrepareAsync(ServerDefinition definition, GlobalSettings settings, CancellationToken cancellationToken) => Task.CompletedTask;
     /// <summary>Checks process and product health without blocking the caller.</summary>
     Task<ServerHealthResult> CheckHealthAsync(ServerDefinition definition, RunningProcessInfo? process, CancellationToken cancellationToken);
     /// <summary>Stops a validated process gracefully where supported, with configured forced termination fallback.</summary>
@@ -153,22 +163,28 @@ public static class ServerValidator
     {
         var errors = new List<string>();
         if (string.IsNullOrWhiteSpace(server.Name)) errors.Add("Name is required.");
-        if (server.Location == ServerLocation.Remote && server.ServerType != ServerType.Nats) errors.Add("Remote monitoring currently supports NATS servers only.");
         if (server.Location == ServerLocation.Local && string.IsNullOrWhiteSpace(server.Executable)) errors.Add("Executable is required.");
         if (server.Location == ServerLocation.Remote && string.IsNullOrWhiteSpace(server.HealthCheckHost)) errors.Add("Remote host is required.");
-        if (server.Location == ServerLocation.Remote && server.Nats.MonitoringPort is null) errors.Add("A remote NATS monitoring port is required.");
+        if (server.Location == ServerLocation.Remote && server.ServerType == ServerType.Nats && server.Nats.MonitoringPort is null) errors.Add("A remote NATS monitoring port is required.");
+        if (server.Location == ServerLocation.Remote && server.ServerType == ServerType.TibcoRendezvous && server.TibRv.HttpAdministrationPort is null) errors.Add("A remote TIBCO RV HTTP administration port is required.");
         if (all.Any(x => x.Id != server.Id && string.Equals(x.Name, server.Name, StringComparison.OrdinalIgnoreCase))) errors.Add("Server names must be unique.");
         var ports = GetPorts(server).Where(x => x.HasValue).Select(x => x!.Value).ToList();
         if (ports.Any(x => x is < 1 or > 65535)) errors.Add("Ports must be between 1 and 65535.");
         if (ports.Count != ports.Distinct().Count()) errors.Add("Ports within a server definition must be unique.");
         if (server.ServerType == ServerType.Nats && server.Nats.MonitoringPort == server.Nats.ClientPort) errors.Add("NATS monitoring and client ports must differ.");
+        if (server.ServerType == ServerType.Nats && server.Nats.MaxPayloadBytes < 1) errors.Add("NATS maximum payload must be at least one byte.");
         if (server.GracefulStopTimeoutSeconds < 0) errors.Add("Graceful stop timeout cannot be negative.");
         if (server.HealthCheckGracePeriodSeconds < 0) errors.Add("Health-check grace period cannot be negative.");
+        if (server.ServerType == ServerType.TibcoRendezvous && server.TibRv.ReliabilitySeconds < 0) errors.Add("TIBCO RV reliability cannot be negative.");
+        if (server.ServerType == ServerType.TibcoRendezvous && server.Location == ServerLocation.Local && server.LaunchMode == LaunchMode.ManagedOptions && string.IsNullOrWhiteSpace(server.TibRv.ListenHost)) errors.Add("TIBCO RV listen host is required.");
+        if (server.ServerType == ServerType.TibcoRendezvous && server.Location == ServerLocation.Local && server.LaunchMode == LaunchMode.ManagedOptions && server.TibRv.HttpAdministrationPort is not null && string.IsNullOrWhiteSpace(server.TibRv.HttpAdministrationHost)) errors.Add("TIBCO RV HTTP administration host is required.");
+        if (server.TibRv.ReusePort is < 1 or > 65535) errors.Add("TIBCO RV reuse port must be between 1 and 65535.");
         var others = all.Where(x => x.Id != server.Id && x.Location == ServerLocation.Local && server.Location == ServerLocation.Local).SelectMany(GetPorts).Where(x => x.HasValue).Select(x => x!.Value).ToHashSet();
         foreach (var port in ports.Distinct().Where(others.Contains)) errors.Add($"Port {port} is already configured.");
-        if (server.Location == ServerLocation.Local && server.LaunchMode == LaunchMode.ConfigFile && (string.IsNullOrWhiteSpace(server.ConfigFilePath) || !File.Exists(resolvePath(server.ConfigFilePath)))) errors.Add("The config file does not exist.");
+        if (server.Location == ServerLocation.Local && server.LaunchMode == LaunchMode.ConfigFile && string.IsNullOrWhiteSpace(server.ConfigFilePath)) errors.Add("A config file path is required.");
+        if (server.Location == ServerLocation.Local && server.LaunchMode == LaunchMode.ConfigFile && !server.ManageConfigFile && !string.IsNullOrWhiteSpace(server.ConfigFilePath) && !File.Exists(resolvePath(server.ConfigFilePath))) errors.Add("The externally managed config file does not exist.");
         if (server.Location == ServerLocation.Local && !string.IsNullOrWhiteSpace(server.WorkingDirectory) && !Directory.Exists(resolvePath(server.WorkingDirectory))) errors.Add("The working directory does not exist.");
-        if (server.Location == ServerLocation.Local && server.ServerType == ServerType.Nats && server.Nats.UseTls && server.LaunchMode == LaunchMode.ManagedOptions)
+        if (server.Location == ServerLocation.Local && server.ServerType == ServerType.Nats && server.Nats.UseTls && (server.LaunchMode == LaunchMode.ManagedOptions || server.LaunchMode == LaunchMode.ConfigFile && server.ManageConfigFile))
         {
             if (string.IsNullOrWhiteSpace(server.Nats.TlsCertificatePath) || !File.Exists(resolvePath(server.Nats.TlsCertificatePath))) errors.Add("A valid NATS TLS certificate file is required.");
             if (string.IsNullOrWhiteSpace(server.Nats.TlsPrivateKeyPath) || !File.Exists(resolvePath(server.Nats.TlsPrivateKeyPath))) errors.Add("A valid NATS TLS private-key file is required.");

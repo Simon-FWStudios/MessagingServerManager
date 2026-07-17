@@ -1,0 +1,11 @@
+# Representative multi-service TIBCO RV Prometheus response
+rv_service_uptime{component="rvd",version="8.7.0",host="rv01",service="7500",network="net-a"} 125
+rv_service_client_connections{component="rvd",version="8.7.0",host="rv01",service="7500",network="net-a"} 3
+rv_service_subscriptions{component="rvd",version="8.7.0",host="rv01",service="7500",network="net-a"} 12
+rv_service_inbound_messages_total{component="rvd",version="8.7.0",host="rv01",service="7500",network="net-a"} 42
+rv_service_outbound_messages_total{component="rvd",version="8.7.0",host="rv01",service="7500",network="net-a"} 40
+rv_service_uptime{component="rvd",version="8.7.0",host="rv01",service="7600",network="net-b"} 250
+rv_service_client_connections{component="rvd",version="8.7.0",host="rv01",service="7600",network="net-b"} 9
+rv_service_subscriptions{component="rvd",version="8.7.0",host="rv01",service="7600",network="net-b"} 30
+rv_service_inbound_messages_total{component="rvd",version="8.7.0",host="rv01",service="7600",network="net-b"} 100
+rv_service_outbound_messages_total{component="rvd",version="8.7.0",host="rv01",service="7600",network="net-b"} 90

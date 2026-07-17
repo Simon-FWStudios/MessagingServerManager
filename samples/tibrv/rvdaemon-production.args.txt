@@ -1,0 +1,2 @@
+# Managed-options equivalent used by Messaging Server Manager.
+-listen localhost:7500 -reliability 60 -http localhost:7580 -reuse-port 7500
