@@ -11,4 +11,13 @@ public class CoreTests
  [Fact]public void Remote_nats_does_not_require_local_executable(){var d=new ServerDefinition{Location=ServerLocation.Remote,Executable="",HealthCheckHost="nats.example",Nats=new(){ClientPort=4222,MonitoringPort=8222}};Assert.True(ServerValidator.Validate(d,[d],Path.GetFullPath).IsValid);}
  [Fact]public void Nats_tls_managed_options_use_https_and_certificate_flags(){var root=Path.Combine(Path.GetTempPath(),Guid.NewGuid().ToString());var adapter=new NatsServerAdapter(new(root),new());var d=new ServerDefinition{LaunchMode=LaunchMode.ManagedOptions,Nats=new(){UseTls=true,ClientPort=4222,MonitoringPort=8222,TlsCertificatePath="server.pem",TlsPrivateKeyPath="server-key.pem",TlsCaCertificatePath="ca.pem",TlsVerifyClients=true}};var args=adapter.BuildArguments(d);Assert.Contains("--https_port 8222",args);Assert.DoesNotContain("--http_port",args);Assert.Contains("--tls ",args);Assert.Contains("--tlscert",args);Assert.Contains("--tlskey",args);Assert.Contains("--tlscacert",args);Assert.Contains("--tlsverify",args);}
  [Fact]public void Remote_tls_monitoring_builds_https_varz_endpoint(){var d=new ServerDefinition{Location=ServerLocation.Remote,HealthCheckHost="nats.example",Nats=new(){UseTls=true,MonitoringPort=8443}};Assert.Equal("https://nats.example:8443/varz",NatsServerAdapter.GetMonitoringUri(d).AbsoluteUri.TrimEnd('/'));}
+ [Fact]public void Tibco_prometheus_metrics_are_parsed_and_aggregated(){var text="""
+ # HELP rv_service_uptime Number of seconds uptime
+ rv_service_uptime{component="rvd",version="8.7.0",host="rv01",service="7500",network="239.1.1.1"} 125
+ rv_service_client_connections{component="rvd",version="8.7.0",host="rv01",service="7500",network="239.1.1.1"} 3
+ rv_service_subscriptions{component="rvd",version="8.7.0",host="rv01",service="7500",network="239.1.1.1"} 12
+ rv_service_inbound_messages_total{component="rvd",version="8.7.0",host="rv01",service="7500",network="239.1.1.1"} 42
+ rv_service_outbound_messages_total{component="rvd",version="8.7.0",host="rv01",service="7500",network="239.1.1.1"} 40
+ rv_service_packets_missed_total{component="rvd",version="8.7.0",host="rv01",service="7500",network="239.1.1.1"} 2
+ """;var metrics=TibRvServerAdapter.ParseMetrics(text);Assert.Equal(TimeSpan.FromSeconds(125),metrics.Uptime);Assert.Equal(3,metrics.ClientConnections);Assert.Equal(12,metrics.Subscriptions);Assert.Equal(42,metrics.InMessages);Assert.Equal(2,metrics.MissedPackets);Assert.Equal("rvd",metrics.Component);Assert.Equal("8.7.0",metrics.Version);Assert.Equal("rv01",metrics.Host);}
 }

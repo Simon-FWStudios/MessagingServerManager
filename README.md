@@ -40,9 +40,9 @@ The toolbar **Load** and **Save / Export** actions transfer a portable, versione
 
 ## Adding servers
 
-Select **Add Server**, choose the product and launch mode, and complete the common and product-specific fields. NATS supports config-file, managed-options, and custom-arguments modes; monitoring uses `/varz` on the configured HTTP monitoring port, falling back to the client TCP port. TIBCO RV managed options include service, network, daemon address, HTTP administration port, and listen port; health uses the optional administration/TCP port or process existence.
+Select **Add Server**, choose the product and launch mode, and complete the common and product-specific fields. NATS supports config-file, managed-options, and custom-arguments modes; telemetry uses `/varz` and readiness uses `/healthz` on the configured HTTP or HTTPS monitoring port. TIBCO RV managed options include service, network, daemon address, HTTP administration port, and listen port; when an HTTP administration port is configured, the application parses its Prometheus-format `/metrics` endpoint.
 
-Each definition has a **Local** or **Remote** location. Local servers are owned as processes and expose lifecycle and local-log actions. Remote NATS definitions are monitor-only: the application reads HTTP or HTTPS `/varz` telemetry for port, uptime, CPU, memory, connections, subscriptions, traffic counters, and slow consumers; PID and local lifecycle/log controls remain unavailable. HTTPS uses the system trust store, or an optional PEM CA certificate configured on the server definition.
+Each definition has a **Local** or **Remote** location. Local servers are owned as processes and expose lifecycle and local-log actions. Remote NATS definitions are monitor-only: the application reads HTTP or HTTPS `/varz` telemetry for port, uptime, CPU, memory, connection capacity, subscriptions, traffic rates and counters, topology, and slow consumers; PID and local lifecycle/log controls remain unavailable. HTTPS uses the system trust store, or an optional PEM CA certificate configured on the server definition.
 
 For local NATS managed-options mode, enabling TLS switches monitoring from `--http_port` to `--https_port` and emits the NATS `--tls`, `--tlscert`, `--tlskey`, optional `--tlscacert`, and optional `--tlsverify` arguments. Config-file mode expects equivalent TLS settings in the selected NATS configuration file. Certificate and private-key files can contain sensitive material and must not be committed.
 
@@ -50,7 +50,9 @@ For local NATS managed-options mode, enabling TLS switches monitoring from `--ht
 
 ## Monitoring and logs
 
-The monitor refreshes every three seconds by default, sampling process identity, PID, start time, uptime, working set, CPU delta, health, exit code, errors, and last-check time. Health failures transition from Starting to Failed after the configured grace period. Stored PIDs are never trusted alone: start time and executable identity must also match. Network and process checks are asynchronous.
+The monitor refreshes every three seconds by default, sampling process identity, PID, start time, uptime, working set, CPU delta, health, exit code, errors, and last-check time. Telemetry availability is independent from process or client-port reachability: a live local process remains Running when metrics are blocked, and a remote NATS server remains Running when its client port is reachable. If neither telemetry nor an independent reachability check succeeds, the remote server is marked unreachable. Changed telemetry failures are written without per-refresh duplication to `logs/monitoring.log`. Stored PIDs are never trusted alone: start time and executable identity must also match. Network and process checks are asynchronous.
+
+The contextual action on each row opens the **Server Metrics** tab when telemetry is configured. It presents a formatted summary and a raw `/varz` JSON or TIBCO Prometheus view, with refresh, copy, and open-endpoint actions. Local log-file and folder actions remain in Server Details.
 
 The Live Log tab reads only a bounded tail with shared file access, displays a useful missing-file message, refreshes as the file grows or is recreated, and supports pause/resume, clear, external open, and containing-folder open.
 

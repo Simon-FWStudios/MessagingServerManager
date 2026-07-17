@@ -92,8 +92,7 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
     }
     public override async Task<ServerHealthResult> CheckHealthAsync(ServerDefinition d, RunningProcessInfo? p, CancellationToken ct)
     {
-        if (p is null) return ServerHealthResult.Unhealthy("Process is not running.");
-        if (d.Nats.MonitoringPort is not null) try { _ = await GetTelemetryAsync(d, ct); return ServerHealthResult.Healthy($"NATS {(d.Nats.UseTls ? "HTTPS" : "HTTP")} /varz healthy"); } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException) { return ServerHealthResult.Unhealthy(ex.Message); }
+        if (p is null && d.Location == ServerLocation.Local) return ServerHealthResult.Unhealthy("Process is not running.");
         return await Tcp.CheckAsync(d.HealthCheckHost, d.Nats.ClientPort, TimeSpan.FromSeconds(2), ct);
     }
     public async Task<RemoteServerTelemetry> GetTelemetryAsync(ServerDefinition d, CancellationToken ct)
@@ -104,21 +103,30 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
         var client = customClient ?? _http;
         using var response = await client.GetAsync(endpoint, ct);
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        var rawJson = await response.Content.ReadAsStringAsync(ct);
+        using var document = JsonDocument.Parse(rawJson);
         var root = document.RootElement;
         var start = Date(root, "start"); var now = Date(root, "now");
         var uptime = start.HasValue && now.HasValue ? now.Value - start.Value : TimeSpan.Zero;
+        using var healthResponse = await client.GetAsync(GetMonitoringUri(d, "healthz"), ct);
+        var clusterName = root.TryGetProperty("cluster", out var cluster) && cluster.ValueKind == JsonValueKind.Object ? String(cluster, "name") : "";
+        var tags = root.TryGetProperty("server_tags", out var tagValues) && tagValues.ValueKind == JsonValueKind.Array ? string.Join(", ", tagValues.EnumerateArray().Select(x => x.GetString()).Where(x => !string.IsNullOrWhiteSpace(x))) : "";
+        var metadata = root.TryGetProperty("server_metadata", out var metadataValue) && metadataValue.ValueKind == JsonValueKind.Object ? metadataValue.GetRawText() : "";
         return new(
             String(root, "server_id"), String(root, "server_name", String(root, "name")), String(root, "version"),
             Int(root, "port", d.Nats.ClientPort), Int(root, d.Nats.UseTls ? "https_port" : "http_port", port), uptime,
             Double(root, "cpu"), Long(root, "mem"), Int(root, "connections"), Int(root, "subscriptions"),
-            Long(root, "in_msgs"), Long(root, "out_msgs"), Long(root, "in_bytes"), Long(root, "out_bytes"), Int(root, "slow_consumers"));
+            Long(root, "in_msgs"), Long(root, "out_msgs"), Long(root, "in_bytes"), Long(root, "out_bytes"), Int(root, "slow_consumers"),
+            Int(root, "max_connections"), Int(root, "total_connections"), Int(root, "routes"), Int(root, "remotes"), Int(root, "leafnodes"),
+            clusterName, tags, metadata, now ?? DateTimeOffset.UtcNow, healthResponse.IsSuccessStatusCode,
+            JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true }));
     }
     public static Uri GetMonitoringUri(ServerDefinition definition)
+        => GetMonitoringUri(definition, "varz");
+    private static Uri GetMonitoringUri(ServerDefinition definition, string path)
     {
         var port = definition.Nats.MonitoringPort ?? throw new InvalidOperationException("A NATS monitoring port is required.");
-        return new UriBuilder(definition.Nats.UseTls ? "https" : "http", definition.HealthCheckHost, port, "varz").Uri;
+        return new UriBuilder(definition.Nats.UseTls ? "https" : "http", definition.HealthCheckHost, port, path).Uri;
     }
     private HttpClient? CreateCustomCaClient(ServerDefinition d)
     {
@@ -150,8 +158,9 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
     }
 }
 
-public sealed class TibRvServerAdapter : ServerAdapterBase
+public sealed class TibRvServerAdapter : ServerAdapterBase, ITibRvMonitor
 {
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(2) };
     public TibRvServerAdapter(PathResolver paths, TcpHealthChecker tcp) : base(paths, tcp) { }
     public override ServerType ServerType => ServerType.TibcoRendezvous;
     public string BuildArguments(ServerDefinition d) => BuildArguments(d, new GlobalSettings());
@@ -163,11 +172,37 @@ public sealed class TibRvServerAdapter : ServerAdapterBase
         (!string.IsNullOrWhiteSpace(d.LogFilePath) ? $" -logfile {Q(ResolveLogPath(d, settings))}" : "") +
         (string.IsNullOrWhiteSpace(d.AdditionalArguments) ? "" : " " + d.AdditionalArguments);
     public override ProcessStartInfo BuildStartInfo(ServerDefinition d, GlobalSettings settings) => StartInfo(d, BuildArguments(d, settings));
-    public override Task<ServerHealthResult> CheckHealthAsync(ServerDefinition d, RunningProcessInfo? p, CancellationToken ct)
+    public override async Task<ServerHealthResult> CheckHealthAsync(ServerDefinition d, RunningProcessInfo? p, CancellationToken ct)
     {
-        if (p is null) return Task.FromResult(ServerHealthResult.Unhealthy("Process is not running."));
+        if (p is null) return ServerHealthResult.Unhealthy("Process is not running.");
         var port = d.TibRv.HttpAdministrationPort ?? d.TibRv.ListenPort ?? d.HealthCheckPort;
-        return port is int value ? Tcp.CheckAsync(d.HealthCheckHost, value, TimeSpan.FromSeconds(2), ct) : Task.FromResult(ServerHealthResult.Healthy("Process is running."));
+        if (d.TibRv.HttpAdministrationPort is not null) return ServerHealthResult.Healthy("Process is running; HTTP metrics configured.");
+        return port is int value ? await Tcp.CheckAsync(d.HealthCheckHost, value, TimeSpan.FromSeconds(2), ct) : ServerHealthResult.Healthy("Process is running.");
+    }
+    public async Task<TibRvTelemetry> GetTelemetryAsync(ServerDefinition d, CancellationToken ct)
+    {
+        var port = d.TibRv.HttpAdministrationPort ?? throw new InvalidOperationException("An HTTP administration port is required for TIBCO RV metrics.");
+        var raw = await Http.GetStringAsync(new UriBuilder("http", d.HealthCheckHost, port, "metrics").Uri, ct);
+        return ParseMetrics(raw);
+    }
+    public static TibRvTelemetry ParseMetrics(string raw)
+    {
+        var values = new Dictionary<string, double>(StringComparer.Ordinal);
+        var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in raw.Split('\n'))
+        {
+            var line = source.Trim(); if (line.Length == 0 || line[0] == '#') continue;
+            var separator = line.LastIndexOfAny([' ', '\t']); if (separator <= 0 || !double.TryParse(line[(separator + 1)..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value)) continue;
+            var descriptor = line[..separator]; var brace = descriptor.IndexOf('{'); var name = brace >= 0 ? descriptor[..brace] : descriptor;
+            values[name] = values.GetValueOrDefault(name) + value;
+            if (labels.Count == 0 && brace >= 0 && descriptor.EndsWith('}')) foreach (var pair in descriptor[(brace + 1)..^1].Split(',')) { var equals = pair.IndexOf('='); if (equals > 0) labels[pair[..equals].Trim()] = pair[(equals + 1)..].Trim().Trim('"'); }
+        }
+        double Metric(string name) => values.GetValueOrDefault(name);
+        string Label(string name) => labels.GetValueOrDefault(name, "");
+        return new(TimeSpan.FromSeconds(Metric("rv_service_uptime")), (int)Metric("rv_service_client_connections"), (int)Metric("rv_service_subscriptions"),
+            (long)Metric("rv_service_inbound_messages_total"), (long)Metric("rv_service_outbound_messages_total"), (long)Metric("rv_service_inbound_bytes_total"), (long)Metric("rv_service_outbound_bytes_total"),
+            (long)Metric("rv_service_inbound_packets_total"), (long)Metric("rv_service_outbound_packets_total"), (long)Metric("rv_service_inbound_dataloss_total"), (long)Metric("rv_service_outbound_dataloss_total"),
+            (long)Metric("rv_service_packets_retransmitted_total"), (long)Metric("rv_service_packets_missed_total"), Label("component"), Label("version"), Label("host"), Label("service"), Label("network"), DateTimeOffset.UtcNow, raw);
     }
     private string ResolveLogPath(ServerDefinition d, GlobalSettings settings)
     {

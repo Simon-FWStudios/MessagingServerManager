@@ -96,7 +96,17 @@ public sealed record RunningProcessInfo(int ProcessId, DateTime StartTimeUtc, st
 public sealed record RemoteServerTelemetry(
     string ServerId, string ServerName, string Version, int ClientPort, int MonitoringPort,
     TimeSpan Uptime, double CpuPercent, long MemoryBytes, int Connections, int Subscriptions,
-    long InMessages, long OutMessages, long InBytes, long OutBytes, int SlowConsumers);
+    long InMessages, long OutMessages, long InBytes, long OutBytes, int SlowConsumers,
+    int MaximumConnections, int TotalConnections, int Routes, int Remotes, int LeafNodes,
+    string ClusterName, string ServerTags, string ServerMetadata, DateTimeOffset SampleTime,
+    bool HealthEndpointHealthy, string RawJson);
+public sealed record TibRvTelemetry(
+    TimeSpan Uptime, int ClientConnections, int Subscriptions,
+    long InMessages, long OutMessages, long InBytes, long OutBytes,
+    long InPackets, long OutPackets, long InDataLoss, long OutDataLoss,
+    long RetransmittedPackets, long MissedPackets,
+    string Component, string Version, string Host, string Service, string Network,
+    DateTimeOffset SampleTime, string RawMetrics);
 public sealed record ServerHealthResult(bool IsHealthy, string Message)
 {
     public static ServerHealthResult Healthy(string message = "Healthy") => new(true, message);
@@ -124,6 +134,10 @@ public interface IServerAdapter
 public interface IRemoteServerMonitor
 {
     Task<RemoteServerTelemetry> GetTelemetryAsync(ServerDefinition definition, CancellationToken cancellationToken);
+}
+public interface ITibRvMonitor
+{
+    Task<TibRvTelemetry> GetTelemetryAsync(ServerDefinition definition, CancellationToken cancellationToken);
 }
 
 /// <summary>Loads and atomically saves durable application configuration.</summary>

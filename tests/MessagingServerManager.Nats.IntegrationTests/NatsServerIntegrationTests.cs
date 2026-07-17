@@ -92,7 +92,7 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
         await manager.StartAsync(definition);
         _ = await WaitForHealthyAsync(adapter, manager, definition);
 
-        await WaitUntilAsync(() => File.Exists(logPath) && new FileInfo(logPath).Length > 0, TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(async () => File.Exists(logPath) && (await new LogTailReader().ReadTailAsync(logPath, 100)).Any(line => line.Contains("Server is ready", StringComparison.OrdinalIgnoreCase)), TimeSpan.FromSeconds(10));
         var lines = await new LogTailReader().ReadTailAsync(logPath, 100);
 
         Assert.Contains(lines, line => line.Contains("Server is ready", StringComparison.OrdinalIgnoreCase));
