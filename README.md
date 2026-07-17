@@ -42,6 +42,10 @@ The toolbar **Load** and **Save / Export** actions transfer a portable, versione
 
 Select **Add Server**, choose the product and launch mode, and complete the common and product-specific fields. NATS supports config-file, managed-options, and custom-arguments modes; monitoring uses `/varz` on the configured HTTP monitoring port, falling back to the client TCP port. TIBCO RV managed options include service, network, daemon address, HTTP administration port, and listen port; health uses the optional administration/TCP port or process existence.
 
+Each definition has a **Local** or **Remote** location. Local servers are owned as processes and expose lifecycle and local-log actions. Remote NATS definitions are monitor-only: the application reads HTTP or HTTPS `/varz` telemetry for port, uptime, CPU, memory, connections, subscriptions, traffic counters, and slow consumers; PID and local lifecycle/log controls remain unavailable. HTTPS uses the system trust store, or an optional PEM CA certificate configured on the server definition.
+
+For local NATS managed-options mode, enabling TLS switches monitoring from `--http_port` to `--https_port` and emits the NATS `--tls`, `--tlscert`, `--tlskey`, optional `--tlscacert`, and optional `--tlsverify` arguments. Config-file mode expects equivalent TLS settings in the selected NATS configuration file. Certificate and private-key files can contain sensitive material and must not be committed.
+
 `nats-server.exe` and `rvdaemon.exe` may be resolved through `PATH`, or set an explicit executable path. Exact RV flags vary by installed TIBCO version; verify the sample arguments against your locally installed documentation.
 
 ## Monitoring and logs

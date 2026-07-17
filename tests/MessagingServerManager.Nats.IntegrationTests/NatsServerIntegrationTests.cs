@@ -29,10 +29,15 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
         await manager.StartAsync(definition);
 
         var health = await WaitForHealthyAsync(adapter, manager, definition);
+        var telemetry = await adapter.GetTelemetryAsync(definition, CancellationToken.None);
         var state = Assert.Single(manager.GetRuntimeStates());
 
         Assert.True(health.IsHealthy, health.Message);
         Assert.True(state.ProcessId > 0);
+        Assert.Equal(definition.Nats.ClientPort, telemetry.ClientPort);
+        Assert.Equal(definition.Nats.MonitoringPort, telemetry.MonitoringPort);
+        Assert.True(telemetry.MemoryBytes > 0);
+        Assert.False(string.IsNullOrWhiteSpace(telemetry.ServerId));
         Assert.Equal(Path.GetFileName(_executable), Path.GetFileName(state.Executable), ignoreCase: true);
         var managedLog = Path.Combine(_root, "logs", definition.LogFilePath!);
         await WaitUntilAsync(() => File.Exists(managedLog) && new FileInfo(managedLog).Length > 0, TimeSpan.FromSeconds(10));

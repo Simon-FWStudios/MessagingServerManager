@@ -1,6 +1,9 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Net.Http;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
 using MessagingServerManager.Core;
 using MessagingServerManager.Infrastructure;
 
@@ -38,7 +41,7 @@ public abstract class ServerAdapterBase : IServerAdapter
     protected static string Q(string value) => $"\"{value.Replace("\"", "\\\"")}\"";
 }
 
-public sealed class NatsServerAdapter : ServerAdapterBase
+public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
 {
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(2) };
     public NatsServerAdapter(PathResolver paths, TcpHealthChecker tcp) : base(paths, tcp) { }
@@ -49,11 +52,19 @@ public sealed class NatsServerAdapter : ServerAdapterBase
         LaunchMode.ConfigFile => $"-c {Q(Paths.Resolve(d.ConfigFilePath!))}" + Extra(d),
         LaunchMode.CustomArguments => d.AdditionalArguments ?? "",
         _ => $"--name {Q(d.Nats.ServerName ?? d.Name)} --port {d.Nats.ClientPort}" +
-             (d.Nats.MonitoringPort is int m ? $" --http_port {m}" : "") +
+             (d.Nats.MonitoringPort is int m ? d.Nats.UseTls ? $" --https_port {m}" : $" --http_port {m}" : "") +
              (d.Nats.ClusterPort is int c ? $" --cluster nats://0.0.0.0:{c}" : "") +
              (!string.IsNullOrWhiteSpace(d.Nats.StoreDirectory) ? $" --store_dir {Q(Paths.Resolve(d.Nats.StoreDirectory))}" : "") + Extra(d)
-             + (!string.IsNullOrWhiteSpace(d.LogFilePath) ? $" --log {Q(ResolveLogPath(d, settings))}" : "")
+             + (!string.IsNullOrWhiteSpace(d.LogFilePath) ? $" --log {Q(ResolveLogPath(d, settings))}" : "") + TlsArguments(d)
     };
+    private string TlsArguments(ServerDefinition d)
+    {
+        if (!d.Nats.UseTls) return "";
+        var arguments = $" --tls --tlscert {Q(Paths.Resolve(d.Nats.TlsCertificatePath!))} --tlskey {Q(Paths.Resolve(d.Nats.TlsPrivateKeyPath!))}";
+        if (!string.IsNullOrWhiteSpace(d.Nats.TlsCaCertificatePath)) arguments += $" --tlscacert {Q(Paths.Resolve(d.Nats.TlsCaCertificatePath))}";
+        if (d.Nats.TlsVerifyClients) arguments += " --tlsverify";
+        return arguments;
+    }
     private static string Extra(ServerDefinition d) => string.IsNullOrWhiteSpace(d.AdditionalArguments) ? "" : " " + d.AdditionalArguments;
     public override ProcessStartInfo BuildStartInfo(ServerDefinition d, GlobalSettings settings) => StartInfo(d, BuildArguments(d, settings));
     public override async Task<StopResult> StopAsync(ServerDefinition definition, RunningProcessInfo processInfo, CancellationToken cancellationToken)
@@ -82,9 +93,55 @@ public sealed class NatsServerAdapter : ServerAdapterBase
     public override async Task<ServerHealthResult> CheckHealthAsync(ServerDefinition d, RunningProcessInfo? p, CancellationToken ct)
     {
         if (p is null) return ServerHealthResult.Unhealthy("Process is not running.");
-        if (d.Nats.MonitoringPort is int port) try { using var response = await _http.GetAsync($"http://{d.HealthCheckHost}:{port}/varz", ct); return response.IsSuccessStatusCode ? ServerHealthResult.Healthy("NATS /varz healthy") : ServerHealthResult.Unhealthy($"NATS returned {(int)response.StatusCode}"); } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { return ServerHealthResult.Unhealthy(ex.Message); }
+        if (d.Nats.MonitoringPort is not null) try { _ = await GetTelemetryAsync(d, ct); return ServerHealthResult.Healthy($"NATS {(d.Nats.UseTls ? "HTTPS" : "HTTP")} /varz healthy"); } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException) { return ServerHealthResult.Unhealthy(ex.Message); }
         return await Tcp.CheckAsync(d.HealthCheckHost, d.Nats.ClientPort, TimeSpan.FromSeconds(2), ct);
     }
+    public async Task<RemoteServerTelemetry> GetTelemetryAsync(ServerDefinition d, CancellationToken ct)
+    {
+        var port = d.Nats.MonitoringPort ?? throw new InvalidOperationException("A NATS monitoring port is required.");
+        var endpoint = GetMonitoringUri(d);
+        using var customClient = CreateCustomCaClient(d);
+        var client = customClient ?? _http;
+        using var response = await client.GetAsync(endpoint, ct);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        var root = document.RootElement;
+        var start = Date(root, "start"); var now = Date(root, "now");
+        var uptime = start.HasValue && now.HasValue ? now.Value - start.Value : TimeSpan.Zero;
+        return new(
+            String(root, "server_id"), String(root, "server_name", String(root, "name")), String(root, "version"),
+            Int(root, "port", d.Nats.ClientPort), Int(root, d.Nats.UseTls ? "https_port" : "http_port", port), uptime,
+            Double(root, "cpu"), Long(root, "mem"), Int(root, "connections"), Int(root, "subscriptions"),
+            Long(root, "in_msgs"), Long(root, "out_msgs"), Long(root, "in_bytes"), Long(root, "out_bytes"), Int(root, "slow_consumers"));
+    }
+    public static Uri GetMonitoringUri(ServerDefinition definition)
+    {
+        var port = definition.Nats.MonitoringPort ?? throw new InvalidOperationException("A NATS monitoring port is required.");
+        return new UriBuilder(definition.Nats.UseTls ? "https" : "http", definition.HealthCheckHost, port, "varz").Uri;
+    }
+    private HttpClient? CreateCustomCaClient(ServerDefinition d)
+    {
+        if (!d.Nats.UseTls || string.IsNullOrWhiteSpace(d.Nats.TlsCaCertificatePath)) return null;
+        var ca = X509Certificate2.CreateFromPemFile(Paths.Resolve(d.Nats.TlsCaCertificatePath));
+        var handler = new HttpClientHandler();
+        handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
+        {
+            if (certificate is null) return false;
+            if ((errors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0) return false;
+            using var chain = new X509Chain();
+            chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+            chain.ChainPolicy.CustomTrustStore.Add(ca);
+            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+            return chain.Build(new X509Certificate2(certificate));
+        };
+        return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(2) };
+    }
+    private static string String(JsonElement root, string name, string fallback = "") => root.TryGetProperty(name, out var value) ? value.GetString() ?? fallback : fallback;
+    private static int Int(JsonElement root, string name, int fallback = 0) => root.TryGetProperty(name, out var value) && value.TryGetInt32(out var result) ? result : fallback;
+    private static long Long(JsonElement root, string name) => root.TryGetProperty(name, out var value) && value.TryGetInt64(out var result) ? result : 0;
+    private static double Double(JsonElement root, string name) => root.TryGetProperty(name, out var value) && value.TryGetDouble(out var result) ? result : 0;
+    private static DateTimeOffset? Date(JsonElement root, string name) => root.TryGetProperty(name, out var value) && value.TryGetDateTimeOffset(out var result) ? result : null;
     private string ResolveLogPath(ServerDefinition d, GlobalSettings settings)
     {
         var path = Path.IsPathRooted(Environment.ExpandEnvironmentVariables(d.LogFilePath!)) ? Paths.Resolve(d.LogFilePath!) : Paths.Resolve(Path.Combine(settings.LoggingRootDirectory, d.LogFilePath!));

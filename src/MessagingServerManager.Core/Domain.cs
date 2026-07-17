@@ -3,6 +3,7 @@ using System.Diagnostics;
 namespace MessagingServerManager.Core;
 
 public enum ServerType { Nats, TibcoRendezvous }
+public enum ServerLocation { Local, Remote }
 public enum LaunchMode { ConfigFile, ManagedOptions, CustomArguments }
 public enum ServerStatus { Unknown, Disabled, Invalid, Stopped, Starting, Running, Stopping, Restarting, Failed }
 
@@ -11,6 +12,7 @@ public sealed class ServerDefinition
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = "New Server";
     public ServerType ServerType { get; set; }
+    public ServerLocation Location { get; set; }
     public bool Enabled { get; set; } = true;
     public string Executable { get; set; } = "nats-server.exe";
     public string? WorkingDirectory { get; set; }
@@ -37,6 +39,11 @@ public sealed class NatsOptions
     public int? MonitoringPort { get; set; } = 8222;
     public int? ClusterPort { get; set; }
     public string? StoreDirectory { get; set; }
+    public bool UseTls { get; set; }
+    public string? TlsCertificatePath { get; set; }
+    public string? TlsPrivateKeyPath { get; set; }
+    public string? TlsCaCertificatePath { get; set; }
+    public bool TlsVerifyClients { get; set; }
 }
 
 public sealed class TibRvOptions
@@ -86,6 +93,10 @@ public sealed class RuntimeProcessState
 }
 
 public sealed record RunningProcessInfo(int ProcessId, DateTime StartTimeUtc, string Executable);
+public sealed record RemoteServerTelemetry(
+    string ServerId, string ServerName, string Version, int ClientPort, int MonitoringPort,
+    TimeSpan Uptime, double CpuPercent, long MemoryBytes, int Connections, int Subscriptions,
+    long InMessages, long OutMessages, long InBytes, long OutBytes, int SlowConsumers);
 public sealed record ServerHealthResult(bool IsHealthy, string Message)
 {
     public static ServerHealthResult Healthy(string message = "Healthy") => new(true, message);
@@ -109,6 +120,12 @@ public interface IServerAdapter
     bool MatchesProcess(ServerDefinition definition, Process process);
 }
 
+/// <summary>Provides product telemetry for a server that is monitored without owning its process.</summary>
+public interface IRemoteServerMonitor
+{
+    Task<RemoteServerTelemetry> GetTelemetryAsync(ServerDefinition definition, CancellationToken cancellationToken);
+}
+
 /// <summary>Loads and atomically saves durable application configuration.</summary>
 public interface IConfigurationStore
 {
@@ -122,7 +139,10 @@ public static class ServerValidator
     {
         var errors = new List<string>();
         if (string.IsNullOrWhiteSpace(server.Name)) errors.Add("Name is required.");
-        if (string.IsNullOrWhiteSpace(server.Executable)) errors.Add("Executable is required.");
+        if (server.Location == ServerLocation.Remote && server.ServerType != ServerType.Nats) errors.Add("Remote monitoring currently supports NATS servers only.");
+        if (server.Location == ServerLocation.Local && string.IsNullOrWhiteSpace(server.Executable)) errors.Add("Executable is required.");
+        if (server.Location == ServerLocation.Remote && string.IsNullOrWhiteSpace(server.HealthCheckHost)) errors.Add("Remote host is required.");
+        if (server.Location == ServerLocation.Remote && server.Nats.MonitoringPort is null) errors.Add("A remote NATS monitoring port is required.");
         if (all.Any(x => x.Id != server.Id && string.Equals(x.Name, server.Name, StringComparison.OrdinalIgnoreCase))) errors.Add("Server names must be unique.");
         var ports = GetPorts(server).Where(x => x.HasValue).Select(x => x!.Value).ToList();
         if (ports.Any(x => x is < 1 or > 65535)) errors.Add("Ports must be between 1 and 65535.");
@@ -130,11 +150,18 @@ public static class ServerValidator
         if (server.ServerType == ServerType.Nats && server.Nats.MonitoringPort == server.Nats.ClientPort) errors.Add("NATS monitoring and client ports must differ.");
         if (server.GracefulStopTimeoutSeconds < 0) errors.Add("Graceful stop timeout cannot be negative.");
         if (server.HealthCheckGracePeriodSeconds < 0) errors.Add("Health-check grace period cannot be negative.");
-        var others = all.Where(x => x.Id != server.Id).SelectMany(GetPorts).Where(x => x.HasValue).Select(x => x!.Value).ToHashSet();
+        var others = all.Where(x => x.Id != server.Id && x.Location == ServerLocation.Local && server.Location == ServerLocation.Local).SelectMany(GetPorts).Where(x => x.HasValue).Select(x => x!.Value).ToHashSet();
         foreach (var port in ports.Distinct().Where(others.Contains)) errors.Add($"Port {port} is already configured.");
-        if (server.LaunchMode == LaunchMode.ConfigFile && (string.IsNullOrWhiteSpace(server.ConfigFilePath) || !File.Exists(resolvePath(server.ConfigFilePath)))) errors.Add("The config file does not exist.");
-        if (!string.IsNullOrWhiteSpace(server.WorkingDirectory) && !Directory.Exists(resolvePath(server.WorkingDirectory))) errors.Add("The working directory does not exist.");
-        try { if (!string.IsNullOrWhiteSpace(server.LogFilePath)) _ = resolvePath(server.LogFilePath); } catch { errors.Add("The log path cannot be resolved."); }
+        if (server.Location == ServerLocation.Local && server.LaunchMode == LaunchMode.ConfigFile && (string.IsNullOrWhiteSpace(server.ConfigFilePath) || !File.Exists(resolvePath(server.ConfigFilePath)))) errors.Add("The config file does not exist.");
+        if (server.Location == ServerLocation.Local && !string.IsNullOrWhiteSpace(server.WorkingDirectory) && !Directory.Exists(resolvePath(server.WorkingDirectory))) errors.Add("The working directory does not exist.");
+        if (server.Location == ServerLocation.Local && server.ServerType == ServerType.Nats && server.Nats.UseTls && server.LaunchMode == LaunchMode.ManagedOptions)
+        {
+            if (string.IsNullOrWhiteSpace(server.Nats.TlsCertificatePath) || !File.Exists(resolvePath(server.Nats.TlsCertificatePath))) errors.Add("A valid NATS TLS certificate file is required.");
+            if (string.IsNullOrWhiteSpace(server.Nats.TlsPrivateKeyPath) || !File.Exists(resolvePath(server.Nats.TlsPrivateKeyPath))) errors.Add("A valid NATS TLS private-key file is required.");
+            if (!string.IsNullOrWhiteSpace(server.Nats.TlsCaCertificatePath) && !File.Exists(resolvePath(server.Nats.TlsCaCertificatePath))) errors.Add("The NATS TLS CA certificate file does not exist.");
+        }
+        if (server.Location == ServerLocation.Remote && server.Nats.UseTls && !string.IsNullOrWhiteSpace(server.Nats.TlsCaCertificatePath) && !File.Exists(resolvePath(server.Nats.TlsCaCertificatePath))) errors.Add("The monitoring TLS CA certificate file does not exist.");
+        try { if (server.Location == ServerLocation.Local && !string.IsNullOrWhiteSpace(server.LogFilePath)) _ = resolvePath(server.LogFilePath); } catch { errors.Add("The log path cannot be resolved."); }
         return new(errors);
     }
     public static IEnumerable<int?> GetPorts(ServerDefinition s) => s.ServerType == ServerType.Nats
