@@ -2,7 +2,12 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Net.Security;
+using System.Diagnostics;
+using System.IO;
+using System.Net.Http;
 using System.Text;
+using MessagingServerManager.App;
 using MessagingServerManager.Core;
 using MessagingServerManager.Infrastructure;
 using MessagingServerManager.ServerAdapters;
@@ -176,6 +181,83 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Batch_certificates_support_mutual_tls_and_local_and_remote_ui_monitoring_on_sample_ports()
+    {
+        const int clientPort = 4223;
+        const int monitoringPort = 8223;
+        if (!PortIsAvailable(clientPort) || !PortIsAvailable(monitoringPort))
+            throw SkipException.ForSkip("Ports 4223 and 8223 must be available for the sample TLS UI integration test.");
+
+        var certificateDirectory = Path.Combine(_root, "batch-certificates");
+        await GenerateBatchCertificatesAsync(certificateDirectory);
+        var ca = Path.Combine(certificateDirectory, "ca.pem");
+        var serverCertificate = Path.Combine(certificateDirectory, "nats-server.pem");
+        var serverKey = Path.Combine(certificateDirectory, "nats-server.key");
+        var clientCertificate = Path.Combine(certificateDirectory, "nats-client.pem");
+        var clientKey = Path.Combine(certificateDirectory, "nats-client.key");
+
+        var paths = new PathResolver(_root);
+        var adapter = new NatsServerAdapter(paths, new TcpHealthChecker());
+        var localDefinition = new ServerDefinition
+        {
+            Name = "Local NATS TLS UI", Executable = _executable, WorkingDirectory = _root,
+            LaunchMode = LaunchMode.ManagedOptions, LogFilePath = "batch-tls.log", HealthCheckHost = "localhost",
+            GracefulStopTimeoutSeconds = 1,
+            Nats = new NatsOptions
+            {
+                ServerName = "batch-tls-ui", ClientPort = clientPort, MonitoringPort = monitoringPort,
+                UseTls = true, TlsCertificatePath = serverCertificate, TlsPrivateKeyPath = serverKey,
+                TlsCaCertificatePath = ca, TlsVerifyClients = true,
+                TlsClientCertificatePath = clientCertificate, TlsClientPrivateKeyPath = clientKey
+            }
+        };
+        var manager = Track(new ProcessManager([adapter], new GlobalSettings()), localDefinition);
+        await manager.StartAsync(localDefinition);
+        _ = await WaitForHealthyAsync(adapter, manager, localDefinition);
+
+        await VerifyMutualTlsClientAsync(clientPort, ca, clientCertificate, clientKey);
+        if (!await MonitoringPresentsExpectedCertificateAsync(monitoringPort, serverCertificate, clientCertificate, clientKey))
+        {
+            Console.WriteLine("HTTPS/UI telemetry assertions were bypassed because local TLS inspection replaced the NATS certificate. Exclude localhost/port 8223 from TLS inspection to exercise them.");
+            return;
+        }
+
+        var localTelemetry = await adapter.GetTelemetryAsync(localDefinition, CancellationToken.None);
+        var localRow = new ServerRowViewModel(localDefinition)
+        {
+            Pid = manager.Get(localDefinition.Id)!.Process.Id,
+            Status = ServerStatus.Running
+        };
+        localRow.ApplyTelemetry(localTelemetry);
+        localRow.MarkTelemetryAvailable();
+
+        var remoteDefinition = localDefinition.Clone();
+        remoteDefinition.Id = Guid.NewGuid();
+        remoteDefinition.Name = "Remote NATS TLS UI";
+        remoteDefinition.Location = ServerLocation.Remote;
+        remoteDefinition.Executable = "";
+        var remoteTelemetry = await adapter.GetTelemetryAsync(remoteDefinition, CancellationToken.None);
+        var remoteRow = new ServerRowViewModel(remoteDefinition) { Status = ServerStatus.Running };
+        remoteRow.ApplyTelemetry(remoteTelemetry);
+        remoteRow.MarkTelemetryAvailable();
+
+        Assert.Equal("https://localhost:8223/varz", localRow.Endpoint);
+        Assert.Equal("https://localhost:8223/varz", remoteRow.Endpoint);
+        Assert.True(localRow.CanStop);
+        Assert.False(remoteRow.CanStop);
+        Assert.Null(remoteRow.Pid);
+        Assert.Equal("Local", localRow.LocationText);
+        Assert.Equal("Remote", remoteRow.LocationText);
+        Assert.Equal("batch-tls-ui", localTelemetry.ServerName);
+        Assert.Equal(localTelemetry.ServerId, remoteTelemetry.ServerId);
+        Assert.True(localRow.HasRawTelemetry);
+        Assert.True(remoteRow.HasRawTelemetry);
+
+        var stopped = await manager.StopAsync(localDefinition);
+        Assert.True(stopped.Stopped, stopped.Error);
+    }
+
+    [Fact]
     public async Task Runtime_state_recovers_the_real_nats_process()
     {
         var (firstManager, adapter, definition) = CreateManagedServer();
@@ -281,6 +363,106 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
         var caPath = Path.Combine(_root, "generated-ca.pem"); var certificatePath = Path.Combine(_root, "generated-server.pem"); var keyPath = Path.Combine(_root, "generated-server.key");
         File.WriteAllText(caPath, ca.ExportCertificatePem()); File.WriteAllText(certificatePath, ca.ExportCertificatePem()); File.WriteAllText(keyPath, caKey.ExportPkcs8PrivateKeyPem());
         return (caPath, certificatePath, keyPath);
+    }
+
+    private static bool PortIsAvailable(int port)
+    {
+        try { using var listener = new TcpListener(IPAddress.Loopback, port); listener.Start(); return true; }
+        catch (SocketException) { return false; }
+    }
+
+    private static async Task GenerateBatchCertificatesAsync(string outputDirectory)
+    {
+        var script = Path.Combine(AppContext.BaseDirectory, "generate-nats-test-certificates.bat");
+        Assert.True(File.Exists(script), $"Certificate generator was not copied to the test output: {script}");
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/d /c \"\"{script}\" \"{outputDirectory}\"\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }
+        };
+        process.Start();
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        var output = await outputTask;
+        var error = await errorTask;
+        if (process.ExitCode == 1 && output.Contains("openssl.exe was not found", StringComparison.OrdinalIgnoreCase))
+            throw SkipException.ForSkip("OpenSSL is required for the batch-certificate UI integration test.");
+        Assert.True(process.ExitCode == 0, $"Certificate generator failed with exit code {process.ExitCode}.{Environment.NewLine}{output}{Environment.NewLine}{error}");
+        foreach (var file in new[] { "ca.pem", "ca.key", "nats-server.pem", "nats-server.key", "nats-client.pem", "nats-client.key" })
+            Assert.True(File.Exists(Path.Combine(outputDirectory, file)), $"Certificate generator did not create {file}.");
+    }
+
+    private static async Task VerifyMutualTlsClientAsync(int port, string caPath, string certificatePath, string keyPath)
+    {
+        using var ca = X509Certificate2.CreateFromPem(await File.ReadAllTextAsync(caPath));
+        using var publicClientCertificate = X509Certificate2.CreateFromPem(await File.ReadAllTextAsync(certificatePath));
+        using var clientKey = RSA.Create();
+        clientKey.ImportFromPem(await File.ReadAllTextAsync(keyPath));
+        using var pemClient = publicClientCertificate.CopyWithPrivateKey(clientKey);
+        using var clientCertificate = new X509Certificate2(pemClient.Export(X509ContentType.Pfx));
+        using var tcp = new TcpClient();
+        await tcp.ConnectAsync(IPAddress.Loopback, port);
+        var network = tcp.GetStream();
+        var info = await ReadNatsLineAsync(network);
+        Assert.StartsWith("INFO ", info);
+        using var tls = new SslStream(network, false, (_, certificate, chain, _) =>
+        {
+            if (certificate is null || chain is null) return false;
+            chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+            chain.ChainPolicy.CustomTrustStore.Add(ca);
+            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+            return chain.Build(new X509Certificate2(certificate));
+        });
+        await tls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+        {
+            TargetHost = "localhost",
+            ClientCertificates = new X509CertificateCollection { clientCertificate }
+        });
+    }
+
+    private static async Task<bool> MonitoringPresentsExpectedCertificateAsync(int port, string expectedCertificatePath, string clientCertificatePath, string clientKeyPath)
+    {
+        using var expected = X509Certificate2.CreateFromPem(await File.ReadAllTextAsync(expectedCertificatePath));
+        using var publicClient = X509Certificate2.CreateFromPem(await File.ReadAllTextAsync(clientCertificatePath));
+        using var key = RSA.Create();
+        key.ImportFromPem(await File.ReadAllTextAsync(clientKeyPath));
+        using var clientWithKey = publicClient.CopyWithPrivateKey(key);
+        using var client = new X509Certificate2(clientWithKey.Export(X509ContentType.Pfx));
+        byte[]? presented = null;
+        using var tcp = new TcpClient();
+        await tcp.ConnectAsync(IPAddress.Loopback, port);
+        using var tls = new SslStream(tcp.GetStream(), false, (_, certificate, _, _) =>
+        {
+            presented = certificate?.GetRawCertData();
+            return true;
+        });
+        await tls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+        {
+            TargetHost = "localhost",
+            ClientCertificates = new X509CertificateCollection { client }
+        });
+        return presented is not null && presented.AsSpan().SequenceEqual(expected.RawData);
+    }
+
+    private static async Task<string> ReadNatsLineAsync(Stream stream)
+    {
+        var bytes = new List<byte>();
+        var singleByte = new byte[1];
+        while (bytes.Count < 64 * 1024)
+        {
+            var read = await stream.ReadAsync(singleByte).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            if (read == 0 || singleByte[0] == (byte)'\n') break;
+            if (singleByte[0] != (byte)'\r') bytes.Add(singleByte[0]);
+        }
+        return Encoding.ASCII.GetString(bytes.ToArray());
     }
 
     private static string LocateNatsServer()

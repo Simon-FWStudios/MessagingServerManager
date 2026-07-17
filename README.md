@@ -46,6 +46,11 @@ Each definition has a **Local** or **Remote** location. Local servers are owned 
 
 For local NATS managed-options mode, enabling TLS switches monitoring from `--http_port` to `--https_port` and emits the NATS `--tls`, `--tlscert`, `--tlskey`, optional `--tlscacert`, and optional `--tlsverify` arguments. Config-file mode can either preserve an externally maintained file or create/update a managed file from the editor settings. New definitions default to managed-file ownership when config-file mode is selected. Generated files use an absolute `log_file`, create its parent directory, and include `max_payload: 67108864` (64 MiB) by default. Externally maintained configs are never rewritten; relative `log_file` entries resolve against the config directory and their parent directories are created before launch. Certificate and private-key files can contain sensitive material and must not be committed.
 
+For a local TLS test environment on client port 4223 and HTTPS monitoring port
+8223, run `scripts\generate-nats-test-certificates.bat` and follow
+[`docs/NATS-TLS-TESTING.md`](docs/NATS-TLS-TESTING.md) for the exact server and
+client certificate mapping.
+
 `nats-server.exe` and `rvdaemon.exe` may be resolved through `PATH`, or set an explicit executable path. Managed TIBCO RV startup follows `rvdaemon.exe -listen localhost:7500 -reliability 60 -http localhost:7580 -reuse-port 7500`, with each value configurable; the matching repository example is `samples/tibrv/rvdaemon-production.args.txt`. Exact RV flags can vary by installed TIBCO version; verify the sample arguments against your locally installed documentation.
 
 ## Monitoring and logs

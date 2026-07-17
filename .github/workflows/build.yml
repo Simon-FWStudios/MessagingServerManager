@@ -25,6 +25,8 @@ jobs:
           "NATS_SERVER_PATH=$nats" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Test
         run: dotnet test MessagingServerManager.sln --no-restore --configuration Release --verbosity normal
+      - name: Restore Windows publish runtime
+        run: dotnet restore src/MessagingServerManager.App/MessagingServerManager.App.csproj --runtime win-x64
       - name: Publish portable Windows application
         run: dotnet publish src/MessagingServerManager.App/MessagingServerManager.App.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true -p:PublishProfile=win-x64
       - name: Upload Windows artifact

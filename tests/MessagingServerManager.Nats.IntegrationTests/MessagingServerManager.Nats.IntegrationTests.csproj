@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -18,5 +19,9 @@
     <ProjectReference Include="..\..\src\MessagingServerManager.Core\MessagingServerManager.Core.csproj" />
     <ProjectReference Include="..\..\src\MessagingServerManager.Infrastructure\MessagingServerManager.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\MessagingServerManager.ServerAdapters\MessagingServerManager.ServerAdapters.csproj" />
+    <ProjectReference Include="..\..\src\MessagingServerManager.App\MessagingServerManager.App.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\scripts\generate-nats-test-certificates.bat" Link="generate-nats-test-certificates.bat" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

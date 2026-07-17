@@ -45,6 +45,8 @@ public sealed class NatsOptions
     public string? TlsCertificatePath { get; set; }
     public string? TlsPrivateKeyPath { get; set; }
     public string? TlsCaCertificatePath { get; set; }
+    public string? TlsClientCertificatePath { get; set; }
+    public string? TlsClientPrivateKeyPath { get; set; }
     public bool TlsVerifyClients { get; set; }
 }
 
@@ -191,6 +193,9 @@ public static class ServerValidator
             if (!string.IsNullOrWhiteSpace(server.Nats.TlsCaCertificatePath) && !File.Exists(resolvePath(server.Nats.TlsCaCertificatePath))) errors.Add("The NATS TLS CA certificate file does not exist.");
         }
         if (server.Location == ServerLocation.Remote && server.Nats.UseTls && !string.IsNullOrWhiteSpace(server.Nats.TlsCaCertificatePath) && !File.Exists(resolvePath(server.Nats.TlsCaCertificatePath))) errors.Add("The monitoring TLS CA certificate file does not exist.");
+        if (server.Nats.UseTls && !string.IsNullOrWhiteSpace(server.Nats.TlsClientCertificatePath) && !File.Exists(resolvePath(server.Nats.TlsClientCertificatePath))) errors.Add("The monitoring TLS client certificate file does not exist.");
+        if (server.Nats.UseTls && !string.IsNullOrWhiteSpace(server.Nats.TlsClientPrivateKeyPath) && !File.Exists(resolvePath(server.Nats.TlsClientPrivateKeyPath))) errors.Add("The monitoring TLS client private-key file does not exist.");
+        if (server.Nats.UseTls && string.IsNullOrWhiteSpace(server.Nats.TlsClientCertificatePath) != string.IsNullOrWhiteSpace(server.Nats.TlsClientPrivateKeyPath)) errors.Add("Both monitoring TLS client certificate and private-key files must be provided together.");
         try { if (server.Location == ServerLocation.Local && !string.IsNullOrWhiteSpace(server.LogFilePath)) _ = resolvePath(server.LogFilePath); } catch { errors.Add("The log path cannot be resolved."); }
         return new(errors);
     }

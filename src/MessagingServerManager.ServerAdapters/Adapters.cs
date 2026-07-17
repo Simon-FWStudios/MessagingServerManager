@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net.Http;
 using System.Net.Security;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using MessagingServerManager.Core;
@@ -208,6 +209,16 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
         if (!d.Nats.UseTls || string.IsNullOrWhiteSpace(d.Nats.TlsCaCertificatePath)) return null;
         var ca = X509Certificate2.CreateFromPem(File.ReadAllText(Paths.Resolve(d.Nats.TlsCaCertificatePath)));
         var handler = new HttpClientHandler();
+        if (!string.IsNullOrWhiteSpace(d.Nats.TlsClientCertificatePath) && !string.IsNullOrWhiteSpace(d.Nats.TlsClientPrivateKeyPath))
+        {
+            var certificatePem = File.ReadAllText(Paths.Resolve(d.Nats.TlsClientCertificatePath));
+            var keyPem = File.ReadAllText(Paths.Resolve(d.Nats.TlsClientPrivateKeyPath));
+            using var publicCertificate = X509Certificate2.CreateFromPem(certificatePem);
+            using var privateKey = RSA.Create();
+            privateKey.ImportFromPem(keyPem);
+            using var certificateWithKey = publicCertificate.CopyWithPrivateKey(privateKey);
+            handler.ClientCertificates.Add(new X509Certificate2(certificateWithKey.Export(X509ContentType.Pfx)));
+        }
         handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
         {
             if (certificate is null) return false;
@@ -218,7 +229,19 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
             chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
             chain.ChainPolicy.CustomTrustStore.Add(ca);
             chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-            return chain.Build(serverCertificate);
+            if (chain.Build(serverCertificate)) return true;
+
+            // Some Windows/OpenSSL certificate combinations do not build with
+            // CustomRootTrust despite the configured CA being the issuing root.
+            // Permit an unknown root only long enough to build the path, then
+            // require that the terminal certificate is exactly the configured CA.
+            using var fallbackChain = new X509Chain();
+            fallbackChain.ChainPolicy.ExtraStore.Add(ca);
+            fallbackChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+            fallbackChain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
+            if (!fallbackChain.Build(serverCertificate) || fallbackChain.ChainElements.Count == 0) return false;
+            var root = fallbackChain.ChainElements[^1].Certificate;
+            return root.RawData.AsSpan().SequenceEqual(ca.RawData);
         };
         return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(2) };
     }
