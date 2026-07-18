@@ -179,6 +179,45 @@ public sealed class CommandTests
     }
 
     [Fact]
+    public void Server_summary_includes_failed_and_invalid_states()
+    {
+        using var viewModel = new MainViewModel(new(Path.GetTempPath()), new MemoryStore(), new(), [new RefreshAdapter()], new());
+        viewModel.Servers.Add(new(new() { Name = "Stopped" }) { Status = ServerStatus.Stopped });
+        viewModel.Servers.Add(new(new() { Name = "Failed" }) { Status = ServerStatus.Failed });
+        viewModel.Servers.Add(new(new() { Name = "Invalid" }) { Status = ServerStatus.Invalid });
+        viewModel.Servers.Add(new(new() { Name = "Disabled", Enabled = false }));
+
+        Assert.Equal("0 running  •  1 stopped  •  1 failed  •  1 invalid  •  1 disabled  •  4 total", viewModel.ServerSummaryText);
+    }
+
+    [Fact]
+    public void About_window_loads_from_embedded_markdown()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            Application? app = null;
+            try
+            {
+                app = Application.Current ?? new Application();
+                var window = new AboutWindow();
+                Assert.Contains("Messaging Server Manager", window.AboutText);
+                Assert.Contains("1.0.0", window.AboutText);
+                window.Show();
+                window.UpdateLayout();
+                window.Close();
+            }
+            catch (Exception ex) { failure = ex; }
+            finally { app?.Shutdown(); }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        Assert.Null(failure);
+    }
+
+    [Fact]
     public async Task Refresh_failure_isolated_to_one_row()
     {
         var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

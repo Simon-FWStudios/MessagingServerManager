@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:MessagingServerManager.App" xmlns:icons="clr-namespace:FluentIcons.Wpf;assembly=FluentIcons.Wpf" x:Class="MessagingServerManager.App.MainWindow" Title="Messaging Server Manager" Width="1650" Height="940" MinWidth="1100" MinHeight="700" Background="#F4F6F9" FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="13">
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:MessagingServerManager.App" xmlns:icons="clr-namespace:FluentIcons.Wpf;assembly=FluentIcons.Wpf" x:Class="MessagingServerManager.App.MainWindow" Title="Messaging Server Manager" Icon="Assets/AppIcon.ico" Width="1650" Height="940" MinWidth="1100" MinHeight="700" Background="#F4F6F9" FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="13">
   <Window.Resources>
     <Style TargetType="Button">
       <Setter Property="Padding" Value="11,7"/>
@@ -244,6 +244,9 @@
               </Button>
               <Button Style="{StaticResource IconButton}" Command="{Binding SettingsCommand}" ToolTip="Settings">
                 <icons:FluentIcon Icon="Settings" IconSize="Size20"/>
+              </Button>
+              <Button Style="{StaticResource IconButton}" Command="{Binding AboutCommand}" ToolTip="About Messaging Server Manager">
+                <icons:FluentIcon Icon="Info" IconSize="Size20"/>
               </Button>
             </StackPanel>
           </Border>
