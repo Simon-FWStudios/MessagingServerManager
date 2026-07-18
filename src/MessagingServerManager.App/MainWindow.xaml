@@ -45,6 +45,26 @@
       <Setter Property="Width" Value="36"/>
       <Setter Property="Height" Value="34"/>
     </Style>
+    <Style x:Key="GhostIconButton" TargetType="Button">
+      <Setter Property="Width" Value="30"/>
+      <Setter Property="Height" Value="28"/>
+      <Setter Property="Padding" Value="3"/>
+      <Setter Property="Margin" Value="0"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+      <Setter Property="Opacity" Value="0.78"/>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="Opacity" Value="1"/>
+        </Trigger>
+        <Trigger Property="IsEnabled" Value="False">
+          <Setter Property="Opacity" Value="0.35"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
     <Style x:Key="Card" TargetType="Border">
       <Setter Property="Background" Value="White"/>
       <Setter Property="BorderBrush" Value="#E1E7EF"/>
@@ -313,7 +333,7 @@
             <TextBlock Text="{Binding Selected.ConnectionsText}" Style="{StaticResource MetricValue}"/>
             <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.ConnectionsSparklineTooltip}">
               <Canvas Width="120" Height="28">
-                <Polyline Points="{Binding Selected.ConnectionsSparkline}" Stroke="#2F80ED" StrokeThickness="2" StrokeLineJoin="Round"/>
+                <Polyline Points="{Binding Selected.ConnectionsSparkline}" Stroke="#2F80ED" StrokeThickness="1.35" StrokeLineJoin="Round"/>
               </Canvas>
             </Viewbox>
             <TextBlock Text="{Binding Selected.ConnectionsSparklineScale}" Style="{StaticResource MetricScale}" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}"/>
@@ -325,7 +345,7 @@
             <TextBlock Text="{Binding Selected.MessageRateText}" ToolTip="{Binding Selected.MessageRateTooltip}" Style="{StaticResource MetricValue}"/>
             <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.MessageRateSparklineTooltip}">
               <Canvas Width="120" Height="28">
-                <Polyline Points="{Binding Selected.MessageRateSparkline}" Stroke="#37A169" StrokeThickness="2" StrokeLineJoin="Round"/>
+                <Polyline Points="{Binding Selected.MessageRateSparkline}" Stroke="#37A169" StrokeThickness="1.35" StrokeLineJoin="Round"/>
               </Canvas>
             </Viewbox>
             <TextBlock Text="{Binding Selected.MessageRateSparklineScale}" Style="{StaticResource MetricScale}" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}"/>
@@ -337,7 +357,7 @@
             <TextBlock Text="{Binding Selected.CpuText}" Style="{StaticResource MetricValue}"/>
             <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.CpuSparklineTooltip}">
               <Canvas Width="120" Height="28">
-                <Polyline Points="{Binding Selected.CpuSparkline}" Stroke="#B66A12" StrokeThickness="2" StrokeLineJoin="Round"/>
+                <Polyline Points="{Binding Selected.CpuSparkline}" Stroke="#B66A12" StrokeThickness="1.35" StrokeLineJoin="Round"/>
               </Canvas>
             </Viewbox>
             <TextBlock Text="{Binding Selected.CpuSparklineScale}" Style="{StaticResource MetricScale}" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}"/>
@@ -349,20 +369,31 @@
             <TextBlock Text="{Binding Selected.MemoryText}" Style="{StaticResource MetricValue}"/>
             <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.MemorySparklineTooltip}">
               <Canvas Width="120" Height="28">
-                <Polyline Points="{Binding Selected.MemorySparkline}" Stroke="#805AD5" StrokeThickness="2" StrokeLineJoin="Round"/>
+                <Polyline Points="{Binding Selected.MemorySparkline}" Stroke="#805AD5" StrokeThickness="1.35" StrokeLineJoin="Round"/>
               </Canvas>
             </Viewbox>
             <TextBlock Text="{Binding Selected.MemorySparklineScale}" Style="{StaticResource MetricScale}" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}"/>
           </StackPanel>
         </Border>
       </UniformGrid>
-      <Border Grid.Row="2" Margin="0,10" Padding="12" MaxHeight="155" Background="White" BorderBrush="#E1E7EF" BorderThickness="1" CornerRadius="8">
+      <Border Grid.Row="2" Margin="0,10" Padding="10,8" Background="White" BorderBrush="#E1E7EF" BorderThickness="1" CornerRadius="8" Visibility="{Binding ServerDetailsCollapsedVisibility}">
+        <DockPanel>
+          <Button DockPanel.Dock="Right" Style="{StaticResource GhostIconButton}" Command="{Binding ToggleServerDetailsCommand}" ToolTip="Expand server details" AutomationProperties.Name="Expand server details">
+            <icons:FluentIcon Icon="ChevronDown" IconSize="Size16" Foreground="#526075"/>
+          </Button>
+          <TextBlock Text="{Binding ServerDetailsHeaderText}" Foreground="#075DB3" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+        </DockPanel>
+      </Border>
+      <Border Grid.Row="2" Margin="0,10" Padding="12" Background="White" BorderBrush="#E1E7EF" BorderThickness="1" CornerRadius="8" Visibility="{Binding ServerDetailsExpandedVisibility}">
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition/>
             <ColumnDefinition/>
             <ColumnDefinition/>
           </Grid.ColumnDefinitions>
+          <Button Grid.Column="2" Style="{StaticResource GhostIconButton}" HorizontalAlignment="Right" VerticalAlignment="Top" Command="{Binding ToggleServerDetailsCommand}" ToolTip="Collapse server details" AutomationProperties.Name="Collapse server details">
+            <icons:FluentIcon Icon="ChevronUp" IconSize="Size16" Foreground="#526075"/>
+          </Button>
           <StackPanel Margin="0,0,18,0">
             <TextBlock Text="{Binding Selected.Name,StringFormat=Server Details &#x2014; {0}}" Foreground="#075DB3" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,8"/>
             <Grid>
@@ -435,14 +466,20 @@
               <TextBlock Grid.Row="2" Text="Last exit code" FontWeight="SemiBold"/>
               <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Selected.LastExitCodeText}"/>
               <TextBlock Grid.Row="3" Text="Last error" FontWeight="SemiBold"/>
-              <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Selected.LastError}" Foreground="#B91C1C" TextWrapping="Wrap"/>
+              <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Selected.LastErrorSummary}" ToolTip="{Binding Selected.LastError}" Foreground="#B91C1C" TextWrapping="Wrap"/>
             </Grid>
-            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
               <Button Style="{StaticResource CompactActionButton}" Command="{Binding OpenLogCommand}" ToolTip="Open log file" AutomationProperties.Name="Open log file">
                 <icons:FluentIcon Icon="Document" IconSize="Size20" Foreground="#B66A12"/>
               </Button>
               <Button Style="{StaticResource CompactActionButton}" Command="{Binding OpenLogFolderCommand}" ToolTip="Open log folder" AutomationProperties.Name="Open log folder">
                 <icons:FluentIcon Icon="FolderOpen" IconSize="Size20" Foreground="#B66A12"/>
+              </Button>
+              <Button Style="{StaticResource CompactActionButton}" Command="{Binding CopyDiagnosticsCommand}" ToolTip="Copy diagnostics as Markdown" AutomationProperties.Name="Copy diagnostics">
+                <icons:FluentIcon Icon="Copy" IconSize="Size20" Foreground="#526075"/>
+              </Button>
+              <Button Style="{StaticResource CompactActionButton}" Command="{Binding ExportDiagnosticsCommand}" ToolTip="Export diagnostics as Markdown" AutomationProperties.Name="Export diagnostics">
+                <icons:FluentIcon Icon="Save" IconSize="Size20" Foreground="#266BB5"/>
               </Button>
             </StackPanel>
           </StackPanel>
@@ -481,9 +518,104 @@
                 <icons:FluentIcon Icon="Open" IconSize="Size20" Foreground="#B66A12"/>
               </Button>
             </StackPanel>
-            <TabControl>
+            <TabControl Style="{StaticResource PremiumTabControl}" ItemContainerStyle="{StaticResource PremiumTabItem}" Margin="8,0,8,8">
               <TabItem Header="Summary">
                 <TextBox Margin="10" Text="{Binding SelectedRemoteMetrics,Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="13" Padding="8"/>
+              </TabItem>
+              <TabItem Header="Activity">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                  <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <DockPanel Grid.Row="0" Margin="4,0,4,10">
+                      <TextBlock DockPanel.Dock="Left" Text="Recent activity over the configured telemetry window" Foreground="#526075" FontWeight="SemiBold"/>
+                      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Rectangle Width="18" Height="3" Fill="#37A169" RadiusX="1.5" RadiusY="1.5" VerticalAlignment="Center"/>
+                        <TextBlock Text="Inbound" Margin="6,0,16,0" Foreground="#526075"/>
+                        <Rectangle Width="18" Height="3" Fill="#2F80ED" RadiusX="1.5" RadiusY="1.5" VerticalAlignment="Center"/>
+                        <TextBlock Text="Outbound" Margin="6,0,0,0" Foreground="#526075"/>
+                      </StackPanel>
+                    </DockPanel>
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,10">
+                      <DockPanel>
+                        <StackPanel DockPanel.Dock="Top">
+                          <TextBlock Text="MESSAGE RATE" Style="{StaticResource MetricLabel}"/>
+                          <TextBlock Text="{Binding Selected.MessageRateLineText}" ToolTip="{Binding Selected.MessageRateTooltip}" Style="{StaticResource MetricValue}"/>
+                          <TextBlock Text="{Binding Selected.MessageRateSparklineScale}" Style="{StaticResource MetricScale}" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                        <Viewbox Height="150" Stretch="Fill" Margin="0,10,0,0" ToolTip="{Binding Selected.MessageRateSparklineTooltip}">
+                          <Canvas Width="120" Height="28">
+                            <Polyline Points="{Binding Selected.InMessageRateSparkline}" Stroke="#37A169" StrokeThickness="1.6" StrokeLineJoin="Round"/>
+                            <Polyline Points="{Binding Selected.OutMessageRateSparkline}" Stroke="#2F80ED" StrokeThickness="1.6" StrokeLineJoin="Round"/>
+                          </Canvas>
+                        </Viewbox>
+                      </DockPanel>
+                    </Border>
+                    <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,10">
+                      <DockPanel>
+                        <StackPanel DockPanel.Dock="Top">
+                          <TextBlock Text="DATA RATE" Style="{StaticResource MetricLabel}"/>
+                          <TextBlock Text="{Binding Selected.DataRateLineText}" ToolTip="{Binding Selected.DataRateTooltip}" Style="{StaticResource MetricValue}"/>
+                          <TextBlock Text="{Binding Selected.DataRateSparklineScale}" Style="{StaticResource MetricScale}" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                        <Viewbox Height="140" Stretch="Fill" Margin="0,10,0,0" ToolTip="{Binding Selected.DataRateSparklineTooltip}">
+                          <Canvas Width="120" Height="28">
+                            <Polyline Points="{Binding Selected.InByteRateSparkline}" Stroke="#37A169" StrokeThickness="1.6" StrokeLineJoin="Round"/>
+                            <Polyline Points="{Binding Selected.OutByteRateSparkline}" Stroke="#2F80ED" StrokeThickness="1.6" StrokeLineJoin="Round"/>
+                          </Canvas>
+                        </Viewbox>
+                      </DockPanel>
+                    </Border>
+                    <UniformGrid Grid.Row="3" Columns="3">
+                      <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                        <DockPanel>
+                          <StackPanel DockPanel.Dock="Top">
+                            <TextBlock Text="CONNECTIONS" Style="{StaticResource MetricLabel}"/>
+                            <TextBlock Text="{Binding Selected.ConnectionsText}" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Text="{Binding Selected.ConnectionsSparklineScale}" Style="{StaticResource MetricScale}" HorizontalAlignment="Left"/>
+                          </StackPanel>
+                          <Viewbox Height="76" Stretch="Fill" Margin="0,8,0,0" ToolTip="{Binding Selected.ConnectionsSparklineTooltip}">
+                            <Canvas Width="120" Height="28">
+                              <Polyline Points="{Binding Selected.ConnectionsSparkline}" Stroke="#2F80ED" StrokeThickness="1.35" StrokeLineJoin="Round"/>
+                            </Canvas>
+                          </Viewbox>
+                        </DockPanel>
+                      </Border>
+                      <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                        <DockPanel>
+                          <StackPanel DockPanel.Dock="Top">
+                            <TextBlock Text="CPU" Style="{StaticResource MetricLabel}"/>
+                            <TextBlock Text="{Binding Selected.CpuText}" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Text="{Binding Selected.CpuSparklineScale}" Style="{StaticResource MetricScale}" HorizontalAlignment="Left"/>
+                          </StackPanel>
+                          <Viewbox Height="76" Stretch="Fill" Margin="0,8,0,0" ToolTip="{Binding Selected.CpuSparklineTooltip}">
+                            <Canvas Width="120" Height="28">
+                              <Polyline Points="{Binding Selected.CpuSparkline}" Stroke="#B66A12" StrokeThickness="1.35" StrokeLineJoin="Round"/>
+                            </Canvas>
+                          </Viewbox>
+                        </DockPanel>
+                      </Border>
+                      <Border Style="{StaticResource Card}">
+                        <DockPanel>
+                          <StackPanel DockPanel.Dock="Top">
+                            <TextBlock Text="MEMORY" Style="{StaticResource MetricLabel}"/>
+                            <TextBlock Text="{Binding Selected.MemoryText}" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Text="{Binding Selected.MemorySparklineScale}" Style="{StaticResource MetricScale}" HorizontalAlignment="Left"/>
+                          </StackPanel>
+                          <Viewbox Height="76" Stretch="Fill" Margin="0,8,0,0" ToolTip="{Binding Selected.MemorySparklineTooltip}">
+                            <Canvas Width="120" Height="28">
+                              <Polyline Points="{Binding Selected.MemorySparkline}" Stroke="#805AD5" StrokeThickness="1.35" StrokeLineJoin="Round"/>
+                            </Canvas>
+                          </Viewbox>
+                        </DockPanel>
+                      </Border>
+                    </UniformGrid>
+                  </Grid>
+                </ScrollViewer>
               </TabItem>
               <TabItem Header="Raw">
                 <TextBox Margin="10" Text="{Binding SelectedRawTelemetry,Mode=OneWay}" IsReadOnly="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" Padding="8"/>
@@ -512,6 +644,17 @@
         </TabItem>
         <TabItem Header="Configuration Summary">
           <TextBox Margin="15" Text="{Binding SelectedConfigurationSummary,Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas"/>
+        </TabItem>
+        <TabItem Header="History">
+          <DataGrid ItemsSource="{Binding SelectedHistory}" AutoGenerateColumns="False" IsReadOnly="True" CanUserSortColumns="True" HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0" RowHeight="34" Margin="8" VerticalScrollBarVisibility="Auto">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Time" Binding="{Binding TimeText}" Width="150" SortMemberPath="Timestamp" ElementStyle="{StaticResource CenteredCellText}"/>
+              <DataGridTextColumn Header="Severity" Binding="{Binding Severity}" Width="95" ElementStyle="{StaticResource CenteredCellText}"/>
+              <DataGridTextColumn Header="Event" Binding="{Binding Category}" Width="165" ElementStyle="{StaticResource CenteredCellText}"/>
+              <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="190" ElementStyle="{StaticResource CenteredCellText}"/>
+              <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*" MinWidth="360" ElementStyle="{StaticResource CenteredCellText}"/>
+            </DataGrid.Columns>
+          </DataGrid>
         </TabItem>
       </TabControl>
     </Grid>

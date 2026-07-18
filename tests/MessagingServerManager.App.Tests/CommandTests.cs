@@ -3,6 +3,7 @@ using MessagingServerManager.Core;
 using MessagingServerManager.Infrastructure;
 using System.Diagnostics;
 using System.IO;
+using System.Windows;
 using System.Windows.Media;
 
 namespace MessagingServerManager.App.Tests;
@@ -132,6 +133,22 @@ public sealed class CommandTests
     {
         var row = new ServerRowViewModel(new ServerDefinition { WorkingDirectory = "" });
         Assert.Equal("Automatic", row.WorkingDirectoryDisplay);
+    }
+
+    [Fact]
+    public void Server_details_toggle_updates_expanded_and_collapsed_visibility()
+    {
+        using var viewModel = new MainViewModel(new(Path.GetTempPath()), new MemoryStore(), new(), [new RefreshAdapter()], new());
+
+        Assert.True(viewModel.IsServerDetailsExpanded);
+        Assert.Equal(Visibility.Visible, viewModel.ServerDetailsExpandedVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.ServerDetailsCollapsedVisibility);
+
+        viewModel.ToggleServerDetailsCommand.Execute(null);
+
+        Assert.False(viewModel.IsServerDetailsExpanded);
+        Assert.Equal(Visibility.Collapsed, viewModel.ServerDetailsExpandedVisibility);
+        Assert.Equal(Visibility.Visible, viewModel.ServerDetailsCollapsedVisibility);
     }
 
     [Fact]

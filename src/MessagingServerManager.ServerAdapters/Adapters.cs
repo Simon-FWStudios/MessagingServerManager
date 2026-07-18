@@ -50,9 +50,9 @@ public abstract class ServerAdapterBase : IServerAdapter
         if (string.IsNullOrWhiteSpace(expanded)) return expanded;
         if (Path.IsPathRooted(expanded)) return Path.GetFullPath(expanded);
         if (expanded.Contains(Path.DirectorySeparatorChar) || expanded.Contains(Path.AltDirectorySeparatorChar)) return Paths.Resolve(expanded);
-        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var directory in ExecutableSearchDirectories())
         {
-            var candidateDirectory = Environment.ExpandEnvironmentVariables(directory.Trim('"'));
+            var candidateDirectory = Environment.ExpandEnvironmentVariables(directory);
             if (string.IsNullOrWhiteSpace(candidateDirectory)) continue;
             foreach (var extension in CandidateExecutableExtensions(expanded))
             {
@@ -61,6 +61,23 @@ public abstract class ServerAdapterBase : IServerAdapter
             }
         }
         return expanded;
+    }
+    private static IEnumerable<string> ExecutableSearchDirectories()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in new[]
+        {
+            Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Process),
+            Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User),
+            Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine)
+        })
+        {
+            foreach (var entry in (path ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var candidate = entry.Trim().Trim('"');
+                if (!string.IsNullOrWhiteSpace(candidate) && seen.Add(candidate)) yield return candidate;
+            }
+        }
     }
     private static IEnumerable<string> CandidateExecutableExtensions(string executable)
     {
