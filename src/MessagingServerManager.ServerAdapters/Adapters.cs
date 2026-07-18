@@ -40,10 +40,34 @@ public abstract class ServerAdapterBase : IServerAdapter
     private static async Task<bool> WaitAsync(Process process, int seconds, CancellationToken ct) { try { await process.WaitForExitAsync(ct).WaitAsync(TimeSpan.FromSeconds(seconds), ct); return true; } catch (TimeoutException) { return false; } }
     protected ProcessStartInfo StartInfo(ServerDefinition d, string args) => new()
     {
-        FileName = Environment.ExpandEnvironmentVariables(d.Executable), Arguments = args,
+        FileName = ResolveExecutablePath(d.Executable), Arguments = args,
         WorkingDirectory = string.IsNullOrWhiteSpace(d.WorkingDirectory) ? Paths.ConfigurationDirectory : Paths.Resolve(d.WorkingDirectory),
         UseShellExecute = false, CreateNoWindow = true
     };
+    protected string ResolveExecutablePath(string executable)
+    {
+        var expanded = Environment.ExpandEnvironmentVariables(executable);
+        if (string.IsNullOrWhiteSpace(expanded)) return expanded;
+        if (Path.IsPathRooted(expanded)) return Path.GetFullPath(expanded);
+        if (expanded.Contains(Path.DirectorySeparatorChar) || expanded.Contains(Path.AltDirectorySeparatorChar)) return Paths.Resolve(expanded);
+        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidateDirectory = Environment.ExpandEnvironmentVariables(directory.Trim('"'));
+            if (string.IsNullOrWhiteSpace(candidateDirectory)) continue;
+            foreach (var extension in CandidateExecutableExtensions(expanded))
+            {
+                var candidate = Path.Combine(candidateDirectory, expanded.EndsWith(extension, StringComparison.OrdinalIgnoreCase) ? expanded : expanded + extension);
+                if (File.Exists(candidate)) return Path.GetFullPath(candidate);
+            }
+        }
+        return expanded;
+    }
+    private static IEnumerable<string> CandidateExecutableExtensions(string executable)
+    {
+        if (!string.IsNullOrWhiteSpace(Path.GetExtension(executable))) return [""];
+        var pathExt = Environment.GetEnvironmentVariable("PATHEXT");
+        return string.IsNullOrWhiteSpace(pathExt) ? [".exe", ".cmd", ".bat"] : pathExt.Split(';', StringSplitOptions.RemoveEmptyEntries);
+    }
     protected static string Q(string value) => $"\"{value.Replace("\"", "\\\"")}\"";
     protected string ResolveLogPath(ServerDefinition d, GlobalSettings settings)
     {
@@ -127,7 +151,7 @@ public sealed class NatsServerAdapter : ServerAdapterBase, IRemoteServerMonitor
         {
             using var signal = Process.Start(new ProcessStartInfo
             {
-                FileName = Environment.ExpandEnvironmentVariables(definition.Executable),
+                FileName = ResolveExecutablePath(definition.Executable),
                 Arguments = $"--signal stop={processInfo.ProcessId}",
                 WorkingDirectory = string.IsNullOrWhiteSpace(definition.WorkingDirectory) ? Paths.ConfigurationDirectory : Paths.Resolve(definition.WorkingDirectory),
                 UseShellExecute = false,

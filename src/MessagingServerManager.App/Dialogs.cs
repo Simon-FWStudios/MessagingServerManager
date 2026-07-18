@@ -1,25 +1,335 @@
-using System.IO;using System.Windows;using System.Windows.Controls;using System.Windows.Data;using Microsoft.Win32;using MessagingServerManager.Core;using MessagingServerManager.Infrastructure;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using Microsoft.Win32;
+using MessagingServerManager.Core;
+using MessagingServerManager.Infrastructure;
+
 namespace MessagingServerManager.App;
-public sealed class ServerEditorWindow:Window
+
+public sealed class ServerEditorWindow : Window
 {
- readonly ServerDefinition server;readonly IReadOnlyList<ServerDefinition> all;readonly PathResolver paths;readonly TextBlock errors=new(){Foreground=System.Windows.Media.Brushes.Firebrick,TextWrapping=TextWrapping.Wrap};
- public ServerEditorWindow(ServerDefinition value,IReadOnlyList<ServerDefinition> definitions,PathResolver resolver){server=value;all=definitions;paths=resolver;DataContext=server;Title=value.Name=="New Server"?"Add Server":"Edit Server";Width=700;Height=800;MinHeight=640;WindowStartupLocation=WindowStartupLocation.CenterOwner;Content=Build();}
- UIElement Build()
- {
-  var root=new DockPanel{Margin=new Thickness(18)};var buttons=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};var save=new Button{Content="Save",MinWidth=90,Margin=new Thickness(5),Padding=new Thickness(10,6,10,6)};save.Click+=Save;var cancel=new Button{Content="Cancel",MinWidth=90,Margin=new Thickness(5),Padding=new Thickness(10,6,10,6)};cancel.Click+=(_,_)=>DialogResult=false;buttons.Children.Add(save);buttons.Children.Add(cancel);DockPanel.SetDock(buttons,Dock.Bottom);root.Children.Add(buttons);DockPanel.SetDock(errors,Dock.Bottom);root.Children.Add(errors);var scroll=new ScrollViewer{VerticalScrollBarVisibility=ScrollBarVisibility.Auto};var panel=new StackPanel();scroll.Content=panel;root.Children.Add(scroll);
-  Add(panel,"Name",nameof(server.Name));var locationCombo=AddCombo(panel,"Server location",nameof(server.Location),Enum.GetValues<ServerLocation>());var typeCombo=AddCombo(panel,"Server type",nameof(server.ServerType),Enum.GetValues<ServerType>());AddCheck(panel,"Enabled",nameof(server.Enabled));Add(panel,"Monitoring host",nameof(server.HealthCheckHost));
-  var localPanel=new StackPanel();localPanel.Children.Add(Header("Local process settings"));Add(localPanel,"Executable name or path",nameof(server.Executable));Add(localPanel,"Working directory",nameof(server.WorkingDirectory));var launchModeCombo=AddCombo(localPanel,"Launch mode",nameof(server.LaunchMode),Enum.GetValues<LaunchMode>());Add(localPanel,"Config file path",nameof(server.ConfigFilePath));var manageConfigCheck=AddCheck(localPanel,"Create/update NATS config from these settings",nameof(server.ManageConfigFile));var argsBox=Add(localPanel,"Additional config lines / arguments",nameof(server.AdditionalArguments),true);Add(localPanel,"Log file name or path",nameof(server.LogFilePath));Add(localPanel,"Health-check port",nameof(server.HealthCheckPort));AddCheck(localPanel,"Start with application",nameof(server.StartWithApplication));AddCheck(localPanel,"Auto restart",nameof(server.AutoRestart));Add(localPanel,"Health-check grace period (seconds)",nameof(server.HealthCheckGracePeriodSeconds));Add(localPanel,"Graceful stop timeout (seconds)",nameof(server.GracefulStopTimeoutSeconds));AddCheck(localPanel,"Force kill after timeout",nameof(server.ForceKillAfterTimeout));panel.Children.Add(localPanel);
-  var natsPanel=new StackPanel();natsPanel.Children.Add(Header("NATS settings"));Add(natsPanel,"Server name","Nats.ServerName");Add(natsPanel,"Client port","Nats.ClientPort");Add(natsPanel,"Monitoring port (HTTP or HTTPS)","Nats.MonitoringPort");Add(natsPanel,"Cluster port","Nats.ClusterPort");Add(natsPanel,"Maximum payload (bytes)","Nats.MaxPayloadBytes");Add(natsPanel,"Store directory","Nats.StoreDirectory");AddCheck(natsPanel,"Use TLS and HTTPS monitoring","Nats.UseTls");var localTlsPanel=new StackPanel();localTlsPanel.Children.Add(Header("Local NATS TLS files"));Add(localTlsPanel,"Server certificate file","Nats.TlsCertificatePath");Add(localTlsPanel,"Server private-key file","Nats.TlsPrivateKeyPath");AddCheck(localTlsPanel,"Verify client certificates","Nats.TlsVerifyClients");natsPanel.Children.Add(localTlsPanel);Add(natsPanel,"CA certificate file (optional; also trusts remote HTTPS)","Nats.TlsCaCertificatePath");Add(natsPanel,"Monitoring client certificate file (optional)","Nats.TlsClientCertificatePath");Add(natsPanel,"Monitoring client private-key file (optional)","Nats.TlsClientPrivateKeyPath");panel.Children.Add(natsPanel);
-  var rvPanel=new StackPanel();rvPanel.Children.Add(Header("TIBCO Rendezvous settings"));Add(rvPanel,"Listen host","TibRv.ListenHost");Add(rvPanel,"Listen port","TibRv.ListenPort");Add(rvPanel,"Reliability (seconds)","TibRv.ReliabilitySeconds");Add(rvPanel,"HTTP administration host","TibRv.HttpAdministrationHost");Add(rvPanel,"HTTP administration port","TibRv.HttpAdministrationPort");Add(rvPanel,"Network","TibRv.Network");var loadArgs=new Button{Content="Load arguments from text file…",Margin=new Thickness(0,8,0,2),Padding=new Thickness(8)};loadArgs.Click+=(_,_)=>{var dialog=new OpenFileDialog{Filter="Text files (*.txt)|*.txt|All files (*.*)|*.*",InitialDirectory=paths.Resolve("sample-config")};if(dialog.ShowDialog()==true){argsBox.Text=File.ReadAllText(dialog.FileName);server.AdditionalArguments=argsBox.Text;}};rvPanel.Children.Add(loadArgs);panel.Children.Add(rvPanel);
-  void UpdatePanels(){typeCombo.IsEnabled=true;localPanel.Visibility=server.Location==ServerLocation.Local?Visibility.Visible:Visibility.Collapsed;natsPanel.Visibility=server.ServerType==ServerType.Nats?Visibility.Visible:Visibility.Collapsed;rvPanel.Visibility=server.ServerType==ServerType.TibcoRendezvous?Visibility.Visible:Visibility.Collapsed;localTlsPanel.Visibility=server.Location==ServerLocation.Local?Visibility.Visible:Visibility.Collapsed;manageConfigCheck.Visibility=server.Location==ServerLocation.Local&&server.ServerType==ServerType.Nats&&server.LaunchMode==LaunchMode.ConfigFile?Visibility.Visible:Visibility.Collapsed;}
-  locationCombo.SelectionChanged+=(_,_)=>UpdatePanels();typeCombo.SelectionChanged+=(_,_)=>UpdatePanels();launchModeCombo.SelectionChanged+=(_,_)=>UpdatePanels();UpdatePanels();return root;
- }
- static TextBlock Header(string text)=>new(){Text=text,FontSize=15,FontWeight=FontWeights.SemiBold,Foreground=System.Windows.Media.Brushes.SteelBlue,Margin=new Thickness(0,16,0,6)};
- static TextBox Add(Panel p,string label,string path,bool multi=false){p.Children.Add(new TextBlock{Text=label,Margin=new Thickness(0,6,0,2)});var box=new TextBox{Padding=new Thickness(6),MinHeight=30,AcceptsReturn=multi,TextWrapping=multi?TextWrapping.Wrap:TextWrapping.NoWrap};if(multi)box.Height=60;box.SetBinding(TextBox.TextProperty,new Binding(path){UpdateSourceTrigger=UpdateSourceTrigger.PropertyChanged,TargetNullValue=""});p.Children.Add(box);return box;}static CheckBox AddCheck(Panel p,string label,string path){var c=new CheckBox{Content=label,Margin=new Thickness(0,8,0,2)};c.SetBinding(CheckBox.IsCheckedProperty,path);p.Children.Add(c);return c;}static ComboBox AddCombo(Panel p,string label,string path,Array values){p.Children.Add(new TextBlock{Text=label,Margin=new Thickness(0,6,0,2)});var c=new ComboBox{ItemsSource=values,Padding=new Thickness(5)};c.SetBinding(ComboBox.SelectedItemProperty,path);p.Children.Add(c);return c;}
- void Save(object sender,RoutedEventArgs e){var v=ServerValidator.Validate(server,all,paths.Resolve);if(!v.IsValid){errors.Text=string.Join(Environment.NewLine,v.Errors);return;}DialogResult=true;}
+    readonly ServerDefinition server;
+    readonly IReadOnlyList<ServerDefinition> all;
+    readonly PathResolver paths;
+    readonly TextBlock errors = new()
+    {
+        Foreground = System.Windows.Media.Brushes.Firebrick,
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(0, 8, 0, 0)
+    };
+
+    public ServerEditorWindow(ServerDefinition value, IReadOnlyList<ServerDefinition> definitions, PathResolver resolver)
+    {
+        server = value;
+        all = definitions;
+        paths = resolver;
+        DataContext = server;
+        Title = value.Name == "New Server" ? "Add Server" : "Edit Server";
+        Width = 760;
+        Height = 840;
+        MinHeight = 680;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Content = Build();
+    }
+
+    UIElement Build()
+    {
+        var root = new DockPanel { Margin = new Thickness(18) };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var save = new Button { Content = "✓ Save", MinWidth = 96, Margin = new Thickness(5), Padding = new Thickness(10, 6, 10, 6) };
+        save.Click += Save;
+        var cancel = new Button { Content = "✕ Cancel", MinWidth = 96, Margin = new Thickness(5), Padding = new Thickness(10, 6, 10, 6) };
+        cancel.Click += (_, _) => DialogResult = false;
+        buttons.Children.Add(save);
+        buttons.Children.Add(cancel);
+        DockPanel.SetDock(buttons, Dock.Bottom);
+        root.Children.Add(buttons);
+        DockPanel.SetDock(errors, Dock.Bottom);
+        root.Children.Add(errors);
+
+        var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var panel = new StackPanel();
+        scroll.Content = panel;
+        root.Children.Add(scroll);
+
+        Add(panel, "Name", nameof(server.Name));
+        var locationCombo = AddCombo(panel, "Server location", nameof(server.Location), Enum.GetValues<ServerLocation>());
+        var typeCombo = AddCombo(panel, "Server type", nameof(server.ServerType), Enum.GetValues<ServerType>());
+        AddCheck(panel, "Enabled", nameof(server.Enabled));
+        Add(panel, "Monitoring host", nameof(server.HealthCheckHost));
+
+        var localPanel = new StackPanel();
+        localPanel.Children.Add(Header("Local process settings"));
+        AddHelp(localPanel, "Leave the working directory blank to use the config-file folder automatically. Bare executable names are resolved from PATH.");
+        AddPath(localPanel, "Executable name or path", nameof(server.Executable), PathPickMode.FileOpen, "Executables (*.exe)|*.exe|All files (*.*)|*.*");
+        AddPath(localPanel, "Working directory override", nameof(server.WorkingDirectory), PathPickMode.Folder);
+        var launchModeCombo = AddCombo(localPanel, "Launch mode", nameof(server.LaunchMode), Enum.GetValues<LaunchMode>());
+        AddPath(localPanel, "Config file path", nameof(server.ConfigFilePath), PathPickMode.FileSave, "NATS config (*.conf)|*.conf|All files (*.*)|*.*");
+        var manageConfigCheck = AddCheck(localPanel, "Create/update NATS config from these settings", nameof(server.ManageConfigFile));
+        var argsBox = Add(localPanel, "Additional config lines / arguments", nameof(server.AdditionalArguments), true);
+        AddPath(localPanel, "Log file name or path", nameof(server.LogFilePath), PathPickMode.FileSave, "Log files (*.log)|*.log|All files (*.*)|*.*");
+        Add(localPanel, "Health-check port", nameof(server.HealthCheckPort));
+        AddCheck(localPanel, "Start with application", nameof(server.StartWithApplication));
+        AddCheck(localPanel, "Auto restart", nameof(server.AutoRestart));
+        Add(localPanel, "Health-check grace period (seconds)", nameof(server.HealthCheckGracePeriodSeconds));
+        Add(localPanel, "Graceful stop timeout (seconds)", nameof(server.GracefulStopTimeoutSeconds));
+        AddCheck(localPanel, "Force kill after timeout", nameof(server.ForceKillAfterTimeout));
+        panel.Children.Add(localPanel);
+
+        var natsPanel = new StackPanel();
+        natsPanel.Children.Add(Header("NATS settings"));
+        Add(natsPanel, "Server name", "Nats.ServerName");
+        Add(natsPanel, "Client port", "Nats.ClientPort");
+        Add(natsPanel, "Monitoring port (HTTP or HTTPS)", "Nats.MonitoringPort");
+        Add(natsPanel, "Cluster port", "Nats.ClusterPort");
+        Add(natsPanel, "Maximum payload (bytes)", "Nats.MaxPayloadBytes");
+        AddPath(natsPanel, "Store directory", "Nats.StoreDirectory", PathPickMode.Folder);
+        AddCheck(natsPanel, "Use TLS and HTTPS monitoring", "Nats.UseTls");
+
+        var localTlsPanel = new StackPanel();
+        localTlsPanel.Children.Add(Header("Local NATS TLS files"));
+        AddPath(localTlsPanel, "Server certificate file", "Nats.TlsCertificatePath", PathPickMode.FileOpen, CertificateFilter);
+        AddPath(localTlsPanel, "Server private-key file", "Nats.TlsPrivateKeyPath", PathPickMode.FileOpen, CertificateFilter);
+        AddCheck(localTlsPanel, "Verify client certificates", "Nats.TlsVerifyClients");
+        natsPanel.Children.Add(localTlsPanel);
+
+        AddPath(natsPanel, "CA certificate file (optional; also trusts remote HTTPS)", "Nats.TlsCaCertificatePath", PathPickMode.FileOpen, CertificateFilter);
+        AddPath(natsPanel, "Monitoring client certificate file (optional)", "Nats.TlsClientCertificatePath", PathPickMode.FileOpen, CertificateFilter);
+        AddPath(natsPanel, "Monitoring client private-key file (optional)", "Nats.TlsClientPrivateKeyPath", PathPickMode.FileOpen, CertificateFilter);
+        panel.Children.Add(natsPanel);
+
+        var rvPanel = new StackPanel();
+        rvPanel.Children.Add(Header("TIBCO Rendezvous settings"));
+        AddHelp(rvPanel, "The local daemon launch uses: rvdaemon.exe -listen host:port -reliability seconds -http host:port");
+        Add(rvPanel, "Listen host", "TibRv.ListenHost");
+        Add(rvPanel, "Listen port", "TibRv.ListenPort");
+        Add(rvPanel, "Reliability (seconds)", "TibRv.ReliabilitySeconds");
+        Add(rvPanel, "HTTP administration host", "TibRv.HttpAdministrationHost");
+        Add(rvPanel, "HTTP administration port", "TibRv.HttpAdministrationPort");
+        Add(rvPanel, "Network", "TibRv.Network");
+        var loadArgs = new Button
+        {
+            Content = "📂 Load arguments from text file…",
+            Margin = new Thickness(0, 8, 0, 2),
+            Padding = new Thickness(8),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            ToolTip = "Load custom RV arguments into the additional arguments box above."
+        };
+        loadArgs.Click += (_, _) =>
+        {
+            var dialog = new OpenFileDialog { Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*", InitialDirectory = paths.Resolve("servers") };
+            if (dialog.ShowDialog() != true) return;
+            argsBox.Text = File.ReadAllText(dialog.FileName);
+            server.AdditionalArguments = argsBox.Text;
+        };
+        rvPanel.Children.Add(loadArgs);
+        panel.Children.Add(rvPanel);
+
+        void UpdatePanels()
+        {
+            typeCombo.IsEnabled = true;
+            localPanel.Visibility = server.Location == ServerLocation.Local ? Visibility.Visible : Visibility.Collapsed;
+            natsPanel.Visibility = server.ServerType == ServerType.Nats ? Visibility.Visible : Visibility.Collapsed;
+            rvPanel.Visibility = server.ServerType == ServerType.TibcoRendezvous ? Visibility.Visible : Visibility.Collapsed;
+            localTlsPanel.Visibility = server.Location == ServerLocation.Local ? Visibility.Visible : Visibility.Collapsed;
+            manageConfigCheck.Visibility = server.Location == ServerLocation.Local && server.ServerType == ServerType.Nats && server.LaunchMode == LaunchMode.ConfigFile ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        locationCombo.SelectionChanged += (_, _) => UpdatePanels();
+        typeCombo.SelectionChanged += (_, _) => UpdatePanels();
+        launchModeCombo.SelectionChanged += (_, _) => UpdatePanels();
+        UpdatePanels();
+        return root;
+    }
+
+    const string CertificateFilter = "Certificate/key files (*.pem;*.crt;*.cer;*.key)|*.pem;*.crt;*.cer;*.key|All files (*.*)|*.*";
+
+    static TextBlock Header(string text) => new()
+    {
+        Text = text,
+        FontSize = 15,
+        FontWeight = FontWeights.SemiBold,
+        Foreground = System.Windows.Media.Brushes.SteelBlue,
+        Margin = new Thickness(0, 16, 0, 6)
+    };
+
+    static void AddHelp(Panel p, string text) => p.Children.Add(new TextBlock
+    {
+        Text = text,
+        Foreground = System.Windows.Media.Brushes.DimGray,
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(0, 0, 0, 8)
+    });
+
+    TextBox AddPath(Panel p, string label, string path, PathPickMode mode, string? filter = null)
+    {
+        p.Children.Add(new TextBlock { Text = label, Margin = new Thickness(0, 6, 0, 2) });
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var box = new TextBox { Padding = new Thickness(6), MinHeight = 30 };
+        box.SetBinding(TextBox.TextProperty, new Binding(path) { UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged, TargetNullValue = "" });
+        var browse = new Button
+        {
+            Content = mode == PathPickMode.Folder ? "📁" : "📄",
+            ToolTip = mode == PathPickMode.Folder ? "Choose folder" : "Choose file",
+            MinWidth = 38,
+            Margin = new Thickness(6, 0, 0, 0)
+        };
+        browse.Click += (_, _) =>
+        {
+            var selected = PickPath(mode, box.Text, filter);
+            if (selected is null) return;
+            box.Text = MakePortable(selected);
+            box.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        };
+        Grid.SetColumn(box, 0);
+        Grid.SetColumn(browse, 1);
+        grid.Children.Add(box);
+        grid.Children.Add(browse);
+        p.Children.Add(grid);
+        return box;
+    }
+
+    string? PickPath(PathPickMode mode, string current, string? filter)
+    {
+        var resolved = string.IsNullOrWhiteSpace(current) ? paths.ConfigurationDirectory : paths.Resolve(current);
+        var directory = Directory.Exists(resolved) ? resolved : Path.GetDirectoryName(resolved);
+        if (mode == PathPickMode.Folder)
+        {
+            var dialog = new OpenFolderDialog { Title = "Choose folder", InitialDirectory = directory };
+            return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
+        }
+        if (mode == PathPickMode.FileSave)
+        {
+            var dialog = new SaveFileDialog { Filter = filter ?? "All files (*.*)|*.*", InitialDirectory = directory, FileName = Path.GetFileName(resolved), OverwritePrompt = false };
+            return dialog.ShowDialog(this) == true ? dialog.FileName : null;
+        }
+        var open = new OpenFileDialog { Filter = filter ?? "All files (*.*)|*.*", InitialDirectory = directory, FileName = File.Exists(resolved) ? Path.GetFileName(resolved) : "" };
+        return open.ShowDialog(this) == true ? open.FileName : null;
+    }
+
+    string MakePortable(string selected)
+    {
+        var full = Path.GetFullPath(selected);
+        var root = Path.GetFullPath(paths.ConfigurationDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return full.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? Path.GetRelativePath(root, full).Replace('\\', '/') : full;
+    }
+
+    static TextBox Add(Panel p, string label, string path, bool multi = false)
+    {
+        p.Children.Add(new TextBlock { Text = label, Margin = new Thickness(0, 6, 0, 2) });
+        var box = new TextBox { Padding = new Thickness(6), MinHeight = 30, AcceptsReturn = multi, TextWrapping = multi ? TextWrapping.Wrap : TextWrapping.NoWrap };
+        if (multi) box.Height = 60;
+        box.SetBinding(TextBox.TextProperty, new Binding(path) { UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged, TargetNullValue = "" });
+        p.Children.Add(box);
+        return box;
+    }
+
+    static CheckBox AddCheck(Panel p, string label, string path)
+    {
+        var c = new CheckBox { Content = label, Margin = new Thickness(0, 8, 0, 2) };
+        c.SetBinding(CheckBox.IsCheckedProperty, path);
+        p.Children.Add(c);
+        return c;
+    }
+
+    static ComboBox AddCombo(Panel p, string label, string path, Array values)
+    {
+        p.Children.Add(new TextBlock { Text = label, Margin = new Thickness(0, 6, 0, 2) });
+        var c = new ComboBox { ItemsSource = values, Padding = new Thickness(5) };
+        c.SetBinding(ComboBox.SelectedItemProperty, path);
+        p.Children.Add(c);
+        return c;
+    }
+
+    void Save(object sender, RoutedEventArgs e)
+    {
+        var validation = ServerValidator.Validate(server, all, paths.Resolve);
+        if (!validation.IsValid)
+        {
+            errors.Text = string.Join(Environment.NewLine, validation.Errors);
+            return;
+        }
+
+        DialogResult = true;
+    }
+
+    enum PathPickMode
+    {
+        FileOpen,
+        FileSave,
+        Folder
+    }
 }
-public sealed class SettingsWindow:Window
+
+public sealed class SettingsWindow : Window
 {
- public SettingsWindow(GlobalSettings settings){Title="Settings";Width=500;Height=650;WindowStartupLocation=WindowStartupLocation.CenterOwner;DataContext=settings;var root=new DockPanel{Margin=new Thickness(18)};var buttons=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};var ok=new Button{Content="Save",Padding=new Thickness(14,7,14,7),Margin=new Thickness(5)};ok.Click+=(_,_)=>{var errors=new List<string>();if(string.IsNullOrWhiteSpace(settings.LoggingRootDirectory))errors.Add("Logging root directory is required.");if(settings.MonitoringIntervalSeconds<1)errors.Add("Monitoring interval must be at least one second.");if(settings.DefaultGracefulStopTimeoutSeconds<0)errors.Add("Stop timeout cannot be negative.");if(settings.MaximumLogLines<1)errors.Add("Maximum log lines must be at least one.");if(settings.MonitoringLogMaximumBytes<1024)errors.Add("Monitoring log maximum size must be at least 1024 bytes.");if(settings.MonitoringLogRetainedFiles<1)errors.Add("At least one rotated monitoring log must be retained.");if(settings.MetricSparklineMinutes<1||settings.MetricSparklineMinutes>240)errors.Add("Metric sparkline history must be between 1 and 240 minutes.");if(errors.Count>0){MessageBox.Show(string.Join(Environment.NewLine,errors),"Invalid settings",MessageBoxButton.OK,MessageBoxImage.Warning);return;}DialogResult=true;};var cancel=new Button{Content="Cancel",Padding=new Thickness(14,7,14,7),Margin=new Thickness(5)};cancel.Click+=(_,_)=>DialogResult=false;buttons.Children.Add(ok);buttons.Children.Add(cancel);DockPanel.SetDock(buttons,Dock.Bottom);root.Children.Add(buttons);var p=new StackPanel();Add(p,"Logging root directory",nameof(settings.LoggingRootDirectory));Add(p,"Monitoring interval (seconds)",nameof(settings.MonitoringIntervalSeconds));Add(p,"Default graceful stop timeout",nameof(settings.DefaultGracefulStopTimeoutSeconds));Add(p,"Maximum log lines",nameof(settings.MaximumLogLines));Add(p,"Monitoring log maximum bytes",nameof(settings.MonitoringLogMaximumBytes));Add(p,"Rotated monitoring logs retained",nameof(settings.MonitoringLogRetainedFiles));Check(p,"Default force-kill policy",nameof(settings.DefaultForceKillPolicy));Check(p,"Confirm before force kill",nameof(settings.ConfirmForceKill));Check(p,"Auto-start enabled servers",nameof(settings.AutoStartEnabledServers));Check(p,"Show metric sparklines",nameof(settings.ShowMetricSparklines));Add(p,"Metric sparkline history (minutes)",nameof(settings.MetricSparklineMinutes));root.Children.Add(p);Content=root;}
- static void Add(Panel p,string label,string path){p.Children.Add(new TextBlock{Text=label,Margin=new Thickness(0,9,0,2)});var b=new TextBox{Padding=new Thickness(6)};b.SetBinding(TextBox.TextProperty,new Binding(path){UpdateSourceTrigger=UpdateSourceTrigger.PropertyChanged});p.Children.Add(b);}static void Check(Panel p,string label,string path){var c=new CheckBox{Content=label,Margin=new Thickness(0,12,0,0)};c.SetBinding(CheckBox.IsCheckedProperty,path);p.Children.Add(c);}
+    public SettingsWindow(GlobalSettings settings)
+    {
+        Title = "Settings";
+        Width = 540;
+        Height = 680;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        DataContext = settings;
+        var root = new DockPanel { Margin = new Thickness(18) };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var ok = new Button { Content = "✓ Save", Padding = new Thickness(14, 7, 14, 7), Margin = new Thickness(5), MinWidth = 96 };
+        ok.Click += (_, _) =>
+        {
+            var errors = new List<string>();
+            if (string.IsNullOrWhiteSpace(settings.LoggingRootDirectory)) errors.Add("Logging root directory is required.");
+            if (settings.MonitoringIntervalSeconds < 1) errors.Add("Monitoring interval must be at least one second.");
+            if (settings.DefaultGracefulStopTimeoutSeconds < 0) errors.Add("Stop timeout cannot be negative.");
+            if (settings.MaximumLogLines < 1) errors.Add("Maximum log lines must be at least one.");
+            if (settings.MonitoringLogMaximumBytes < 1024) errors.Add("Monitoring log maximum size must be at least 1024 bytes.");
+            if (settings.MonitoringLogRetainedFiles < 1) errors.Add("At least one rotated monitoring log must be retained.");
+            if (settings.MetricSparklineMinutes < 1 || settings.MetricSparklineMinutes > 240) errors.Add("Metric sparkline history must be between 1 and 240 minutes.");
+            if (errors.Count > 0)
+            {
+                MessageBox.Show(string.Join(Environment.NewLine, errors), "Invalid settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            DialogResult = true;
+        };
+        var cancel = new Button { Content = "✕ Cancel", Padding = new Thickness(14, 7, 14, 7), Margin = new Thickness(5), MinWidth = 96 };
+        cancel.Click += (_, _) => DialogResult = false;
+        buttons.Children.Add(ok);
+        buttons.Children.Add(cancel);
+        DockPanel.SetDock(buttons, Dock.Bottom);
+        root.Children.Add(buttons);
+
+        var p = new StackPanel();
+        Add(p, "Logging root directory", nameof(settings.LoggingRootDirectory));
+        Add(p, "Monitoring interval (seconds)", nameof(settings.MonitoringIntervalSeconds));
+        Add(p, "Default graceful stop timeout", nameof(settings.DefaultGracefulStopTimeoutSeconds));
+        Add(p, "Maximum log lines", nameof(settings.MaximumLogLines));
+        Add(p, "Monitoring log maximum bytes", nameof(settings.MonitoringLogMaximumBytes));
+        Add(p, "Rotated monitoring logs retained", nameof(settings.MonitoringLogRetainedFiles));
+        Check(p, "Default force-kill policy", nameof(settings.DefaultForceKillPolicy));
+        Check(p, "Confirm before force kill", nameof(settings.ConfirmForceKill));
+        Check(p, "Auto-start enabled servers", nameof(settings.AutoStartEnabledServers));
+        Check(p, "Show metric sparklines", nameof(settings.ShowMetricSparklines));
+        Add(p, "Metric sparkline history (minutes)", nameof(settings.MetricSparklineMinutes));
+        root.Children.Add(p);
+        Content = root;
+    }
+
+    static void Add(Panel p, string label, string path)
+    {
+        p.Children.Add(new TextBlock { Text = label, Margin = new Thickness(0, 9, 0, 2) });
+        var b = new TextBox { Padding = new Thickness(6) };
+        b.SetBinding(TextBox.TextProperty, new Binding(path) { UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
+        p.Children.Add(b);
+    }
+
+    static void Check(Panel p, string label, string path)
+    {
+        var c = new CheckBox { Content = label, Margin = new Thickness(0, 12, 0, 0) };
+        c.SetBinding(CheckBox.IsCheckedProperty, path);
+        p.Children.Add(c);
+    }
 }

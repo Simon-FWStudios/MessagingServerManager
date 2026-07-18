@@ -57,6 +57,45 @@ public sealed class NatsServerIntegrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Bare_path_executable_with_blank_working_directory_starts_generated_config_server()
+    {
+        var previousPath = Environment.GetEnvironmentVariable("PATH");
+        Environment.SetEnvironmentVariable("PATH", Path.GetDirectoryName(_executable) + Path.PathSeparator + previousPath);
+        try
+        {
+            var clientPort = GetAvailablePort();
+            var monitoringPort = GetAvailablePort();
+            var paths = new PathResolver(_root);
+            var adapter = new NatsServerAdapter(paths, new TcpHealthChecker());
+            var definition = new ServerDefinition
+            {
+                Name = "PATH NATS",
+                Executable = "nats-server.exe",
+                WorkingDirectory = null,
+                LaunchMode = LaunchMode.ConfigFile,
+                ManageConfigFile = true,
+                ConfigFilePath = "servers/path-nats/nats.conf",
+                LogFilePath = "path-nats/nats.log",
+                GracefulStopTimeoutSeconds = 1,
+                HealthCheckHost = "127.0.0.1",
+                Nats = new NatsOptions { ServerName = "path-nats", ClientPort = clientPort, MonitoringPort = monitoringPort, StoreDirectory = "data/path-nats" }
+            };
+            var manager = Track(new ProcessManager([adapter], new GlobalSettings()), definition);
+
+            await manager.StartAsync(definition);
+            var health = await WaitForHealthyAsync(adapter, manager, definition);
+            var startInfo = adapter.BuildStartInfo(definition, new GlobalSettings());
+
+            Assert.True(health.IsHealthy, health.Message);
+            Assert.True(Path.IsPathRooted(startInfo.FileName), startInfo.FileName);
+            Assert.Equal(Path.Combine(_root, "servers", "path-nats"), startInfo.WorkingDirectory);
+            Assert.True(File.Exists(Path.Combine(_root, "servers", "path-nats", "nats.conf")));
+            Assert.True(File.Exists(Path.Combine(_root, "logs", "path-nats", "nats.log")));
+        }
+        finally { Environment.SetEnvironmentVariable("PATH", previousPath); }
+    }
+
+    [Fact]
     public async Task Restart_replaces_real_nats_process_and_restores_health()
     {
         var (manager, adapter, definition) = CreateManagedServer();

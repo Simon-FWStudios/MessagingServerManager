@@ -89,12 +89,18 @@ public sealed class CommandTests
         row.RecordMetricSample(sample.AddMinutes(-10), 5);
         row.ApplyTelemetry(new RemoteServerTelemetry("id", "name", "1", 4222, 8222, TimeSpan.FromSeconds(11), 2, 200, 20, 3, 10, 10, 200, 100, 0, 100, 2, 0, 0, 0, "", "", "", sample, true, "{}"));
         row.RecordMetricSample(sample, 5);
+        row.ApplyTelemetry(new RemoteServerTelemetry("id", "name", "1", 4222, 8222, TimeSpan.FromSeconds(12), 3, 300, 25, 3, 20, 20, 300, 150, 0, 100, 2, 0, 0, 0, "", "", "", sample.AddSeconds(1), true, "{}"));
+        row.RecordMetricSample(sample.AddSeconds(1), 5);
 
-        Assert.Contains("1 sample", row.SparklineTooltip);
+        Assert.Contains("2 sample", row.SparklineTooltip);
         Assert.Equal(2, row.ConnectionsSparkline.Count);
+        Assert.Equal("20 → 25", row.ConnectionsSparklineScale);
+        Assert.Equal("0/s → 20/s", row.MessageRateSparklineScale);
+        Assert.Contains("Peak: 20/s", row.MessageRateSparklineTooltip);
 
         row.ClearMetricHistory();
         Assert.Empty(row.ConnectionsSparkline);
+        Assert.Equal("", row.ConnectionsSparklineScale);
     }
 
     [Fact]
@@ -119,6 +125,13 @@ public sealed class CommandTests
         var row = new ServerRowViewModel(new ServerDefinition());
         Assert.Equal(ServerStatus.Stopped, row.Status);
         Assert.Same(Brushes.SlateGray, row.StatusBrush);
+    }
+
+    [Fact]
+    public void Blank_working_directory_is_displayed_as_automatic()
+    {
+        var row = new ServerRowViewModel(new ServerDefinition { WorkingDirectory = "" });
+        Assert.Equal("Automatic", row.WorkingDirectoryDisplay);
     }
 
     [Fact]

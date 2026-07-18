@@ -63,6 +63,12 @@
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Margin" Value="0,4,0,0"/>
     </Style>
+    <Style x:Key="MetricScale" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="#5F6B7A"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Margin" Value="0,3,0,0"/>
+      <Setter Property="TextAlignment" Value="Right"/>
+    </Style>
     <Style x:Key="CenteredCellText" TargetType="TextBlock">
       <Setter Property="VerticalAlignment" Value="Center"/>
       <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
@@ -305,44 +311,48 @@
           <StackPanel>
             <TextBlock Text="CONNECTIONS" Style="{StaticResource MetricLabel}"/>
             <TextBlock Text="{Binding Selected.ConnectionsText}" Style="{StaticResource MetricValue}"/>
-            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.SparklineTooltip}">
+            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.ConnectionsSparklineTooltip}">
               <Canvas Width="120" Height="28">
                 <Polyline Points="{Binding Selected.ConnectionsSparkline}" Stroke="#2F80ED" StrokeThickness="2" StrokeLineJoin="Round"/>
               </Canvas>
             </Viewbox>
+            <TextBlock Text="{Binding Selected.ConnectionsSparklineScale}" Style="{StaticResource MetricScale}" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}"/>
           </StackPanel>
         </Border>
         <Border Style="{StaticResource Card}" Margin="0,0,8,0">
           <StackPanel>
             <TextBlock Text="MESSAGE RATE (IN / OUT)" Style="{StaticResource MetricLabel}"/>
             <TextBlock Text="{Binding Selected.MessageRateText}" ToolTip="{Binding Selected.MessageRateTooltip}" Style="{StaticResource MetricValue}"/>
-            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.SparklineTooltip}">
+            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.MessageRateSparklineTooltip}">
               <Canvas Width="120" Height="28">
                 <Polyline Points="{Binding Selected.MessageRateSparkline}" Stroke="#37A169" StrokeThickness="2" StrokeLineJoin="Round"/>
               </Canvas>
             </Viewbox>
+            <TextBlock Text="{Binding Selected.MessageRateSparklineScale}" Style="{StaticResource MetricScale}" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}"/>
           </StackPanel>
         </Border>
         <Border Style="{StaticResource Card}" Margin="0,0,8,0">
           <StackPanel>
             <TextBlock Text="CPU" Style="{StaticResource MetricLabel}"/>
             <TextBlock Text="{Binding Selected.CpuText}" Style="{StaticResource MetricValue}"/>
-            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.SparklineTooltip}">
+            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.CpuSparklineTooltip}">
               <Canvas Width="120" Height="28">
                 <Polyline Points="{Binding Selected.CpuSparkline}" Stroke="#B66A12" StrokeThickness="2" StrokeLineJoin="Round"/>
               </Canvas>
             </Viewbox>
+            <TextBlock Text="{Binding Selected.CpuSparklineScale}" Style="{StaticResource MetricScale}" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}"/>
           </StackPanel>
         </Border>
         <Border Style="{StaticResource Card}">
           <StackPanel>
             <TextBlock Text="MEMORY" Style="{StaticResource MetricLabel}"/>
             <TextBlock Text="{Binding Selected.MemoryText}" Style="{StaticResource MetricValue}"/>
-            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.SparklineTooltip}">
+            <Viewbox Height="28" Margin="0,7,0,0" Stretch="Fill" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}" ToolTip="{Binding Selected.MemorySparklineTooltip}">
               <Canvas Width="120" Height="28">
                 <Polyline Points="{Binding Selected.MemorySparkline}" Stroke="#805AD5" StrokeThickness="2" StrokeLineJoin="Round"/>
               </Canvas>
             </Viewbox>
+            <TextBlock Text="{Binding Selected.MemorySparklineScale}" Style="{StaticResource MetricScale}" Visibility="{Binding Settings.ShowMetricSparklines,Converter={StaticResource BooleanToVisibility}}"/>
           </StackPanel>
         </Border>
       </UniformGrid>
