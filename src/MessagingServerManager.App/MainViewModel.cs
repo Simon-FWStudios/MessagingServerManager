@@ -106,7 +106,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (failure is not null) AsyncCommandErrors.Report(new IOException("The application closed safely, but runtime state could not be fully saved.", failure));
     }
     readonly RotatingTextLog monitoringLog = new(); readonly object backgroundGate = new(); readonly HashSet<Task> backgroundTasks = []; Task monitorTask = Task.CompletedTask; bool disposed;
-    readonly PathResolver paths; readonly IConfigurationStore store; readonly ConfigurationTransferService transfer; readonly Dictionary<ServerType, IServerAdapter> adapters; readonly ProcessManager processes; readonly LogTailReader logs = new(); readonly CancellationTokenSource shutdown = new(); CancellationTokenSource monitoringIntervalChanged = new(); readonly System.Windows.Threading.DispatcherTimer relativeTimeTimer = new() { Interval = TimeSpan.FromSeconds(1) }; readonly HashSet<Guid> intentionalExits = []; readonly Dictionary<Guid, string> telemetryErrors = []; ServerRowViewModel? selected; string logText = "Select a server to view its log."; bool paused; bool detailsExpanded = true; DateTime lastUpdated; int selectedDetailTabIndex;
+    readonly PathResolver paths; readonly IConfigurationStore store; readonly ConfigurationTransferService transfer; readonly Dictionary<ServerType, IServerAdapter> adapters; readonly ProcessManager processes; readonly LogTailReader logs = new(); readonly CancellationTokenSource shutdown = new(); CancellationTokenSource monitoringIntervalChanged = new(); readonly System.Windows.Threading.DispatcherTimer relativeTimeTimer = new() { Interval = TimeSpan.FromSeconds(1) }; readonly HashSet<Guid> intentionalExits = []; readonly Dictionary<Guid, string> telemetryErrors = []; ServerRowViewModel? selected; string logText = "Select a server to view its log."; bool paused; bool detailsExpanded = true; bool compactLayout; DateTime lastUpdated; int selectedDetailTabIndex;
     public string ServerSummaryText
     {
         get
@@ -138,10 +138,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public int SelectedDetailTabIndex { get => selectedDetailTabIndex; set => Set(ref selectedDetailTabIndex, value); }
     public string LogText { get => logText; set => Set(ref logText, value); }
     public bool IsLogPaused { get => paused; set => Set(ref paused, value); }
-    public bool IsServerDetailsExpanded { get => detailsExpanded; set { if (Set(ref detailsExpanded, value)) { Raise(nameof(ServerDetailsExpandedVisibility)); Raise(nameof(ServerDetailsCollapsedVisibility)); Raise(nameof(ServerDetailsToggleIcon)); } } }
-    public Visibility ServerDetailsExpandedVisibility => IsServerDetailsExpanded ? Visibility.Visible : Visibility.Collapsed;
-    public Visibility ServerDetailsCollapsedVisibility => IsServerDetailsExpanded ? Visibility.Collapsed : Visibility.Visible;
+    public bool IsServerDetailsExpanded { get => detailsExpanded; set { if (Set(ref detailsExpanded, value)) RaiseResponsiveLayoutProperties(); } }
+    public bool IsCompactLayout { get => compactLayout; private set { if (Set(ref compactLayout, value)) RaiseResponsiveLayoutProperties(); } }
+    public Visibility MetricCardsVisibility => IsCompactLayout ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility ServerDetailsExpandedVisibility => IsServerDetailsExpanded && !IsCompactLayout ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility ServerDetailsCollapsedVisibility => IsServerDetailsExpanded && !IsCompactLayout ? Visibility.Collapsed : Visibility.Visible;
     public string ServerDetailsToggleIcon => IsServerDetailsExpanded ? "ChevronUp" : "ChevronDown";
+    public double ServerListMaxHeight => IsCompactLayout ? 185 : 330;
+    public Thickness MainContentMargin => IsCompactLayout ? new Thickness(8) : new Thickness(14);
     public string ServerDetailsHeaderText => Selected is null ? "Server Details" : $"Server Details — {Selected.Name} • {Selected.StatusText} • {Selected.ExecutableDisplay}";
     public DateTime LastUpdated { get => lastUpdated; set { if (Set(ref lastUpdated, value)) Raise(nameof(LastUpdatedText)); } }
     public string LastUpdatedText { get { if (LastUpdated == default) return "Waiting for first refresh"; var age = DateTime.Now - LastUpdated; var relative = age.TotalSeconds < 2 ? "just now" : age.TotalSeconds < 60 ? $"{(int)age.TotalSeconds}s ago" : age.TotalMinutes < 60 ? $"{(int)age.TotalMinutes}m ago" : $"{(int)age.TotalHours}h ago"; return $"Updated {relative} • every {Settings.MonitoringIntervalSeconds}s"; } }
@@ -197,6 +201,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         TrackBackground(SaveHistoryAsync());
     }
     void ToggleServerDetails() => IsServerDetailsExpanded = !IsServerDetailsExpanded;
+    public void SetResponsiveLayout(double width, double height)
+    {
+        IsCompactLayout = height < 860 || width < 1180;
+    }
+    void RaiseResponsiveLayoutProperties()
+    {
+        Raise(nameof(ServerDetailsExpandedVisibility));
+        Raise(nameof(ServerDetailsCollapsedVisibility));
+        Raise(nameof(ServerDetailsToggleIcon));
+        Raise(nameof(MetricCardsVisibility));
+        Raise(nameof(ServerListMaxHeight));
+        Raise(nameof(MainContentMargin));
+    }
     void EnsureApplicationDirectories() { Directory.CreateDirectory(paths.Resolve(Settings.LoggingRootDirectory)); Directory.CreateDirectory(paths.Resolve("servers")); Directory.CreateDirectory(paths.Resolve("data")); }
     bool MigrateLegacySampleDefinitions(IEnumerable<ServerDefinition> definitions) { var changed = false; foreach (var definition in definitions) { if (definition.ServerType == ServerType.Nats && definition.Location == ServerLocation.Local && string.Equals(definition.ConfigFilePath?.Replace('\\', '/'), "sample-config/nats-server.conf", StringComparison.OrdinalIgnoreCase)) { ApplyManagedNatsDefaults(definition, "local-nats"); changed = true; } if (definition.ServerType == ServerType.Nats && definition.Location == ServerLocation.Local && definition.Nats.UseTls && string.Equals(definition.LogFilePath?.Replace('\\', '/'), "nats/local-nats-tls.log", StringComparison.OrdinalIgnoreCase)) { definition.LogFilePath = "local-nats-tls/nats.log"; definition.Nats.StoreDirectory ??= "data/local-nats-tls"; changed = true; } if (definition.ServerType == ServerType.TibcoRendezvous && definition.Location == ServerLocation.Local && string.Equals(definition.LogFilePath?.Replace('\\', '/'), "tibrv/local-rvdaemon.log", StringComparison.OrdinalIgnoreCase)) { definition.LogFilePath = "local-rv-daemon/rvdaemon.log"; changed = true; } } return changed; }
     void QuarantineCorruptRuntimeFiles() { var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"); foreach (var source in new[] { paths.Resolve("runtime.json"), paths.Resolve("runtime.json.bak") }) { if (!File.Exists(source)) continue; try { File.Move(source, source + ".corrupt-" + stamp, true); } catch (Exception ex) { Debug.WriteLine($"Could not quarantine {source}: {ex.Message}"); } } }

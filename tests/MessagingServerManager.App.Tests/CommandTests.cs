@@ -152,6 +152,26 @@ public sealed class CommandTests
     }
 
     [Fact]
+    public void Compact_layout_hides_metric_cards_and_keeps_details_collapsed()
+    {
+        using var viewModel = new MainViewModel(new(Path.GetTempPath()), new MemoryStore(), new(), [new RefreshAdapter()], new());
+
+        viewModel.SetResponsiveLayout(1280, 768);
+
+        Assert.True(viewModel.IsCompactLayout);
+        Assert.Equal(Visibility.Collapsed, viewModel.MetricCardsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.ServerDetailsExpandedVisibility);
+        Assert.Equal(Visibility.Visible, viewModel.ServerDetailsCollapsedVisibility);
+        Assert.True(viewModel.ServerListMaxHeight < 330);
+
+        viewModel.SetResponsiveLayout(1280, 900);
+
+        Assert.False(viewModel.IsCompactLayout);
+        Assert.Equal(Visibility.Visible, viewModel.MetricCardsVisibility);
+        Assert.Equal(Visibility.Visible, viewModel.ServerDetailsExpandedVisibility);
+    }
+
+    [Fact]
     public void Last_exit_code_hides_empty_and_negative_values()
     {
         var row = new ServerRowViewModel(new ServerDefinition());
@@ -202,7 +222,7 @@ public sealed class CommandTests
                 app = Application.Current ?? new Application();
                 var window = new AboutWindow();
                 Assert.Contains("Messaging Server Manager", window.AboutText);
-                Assert.Contains("1.0.0", window.AboutText);
+                Assert.Contains("1.0.1", window.AboutText);
                 window.Show();
                 window.UpdateLayout();
                 window.Close();

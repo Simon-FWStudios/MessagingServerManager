@@ -14,6 +14,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Closing += OnClosing;
+        SizeChanged += (_, _) => ApplyResponsiveLayout();
+        DataContextChanged += (_, _) => ApplyResponsiveLayout();
         SourceInitialized += (_, _) => ApplyRoundedCorners();
     }
     private void ApplyRoundedCorners()
@@ -21,6 +23,10 @@ public partial class MainWindow : Window
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)) return;
         var preference = RoundCorners;
         _ = DwmSetWindowAttribute(new WindowInteropHelper(this).Handle, DwmWindowCornerPreference, ref preference, sizeof(int));
+    }
+    private void ApplyResponsiveLayout()
+    {
+        if (DataContext is MainViewModel viewModel) viewModel.SetResponsiveLayout(ActualWidth, ActualHeight);
     }
     private async void OnClosing(object? sender, CancelEventArgs e)
     {

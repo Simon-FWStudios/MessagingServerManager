@@ -23,7 +23,15 @@ It supports local lifecycle control, remote telemetry views, live logs, historic
 
 ## Version history
 
-### {{Version}} — Current development build
+### 1.0.1 — Responsive layout polish
+
+- Improved resizing behavior on smaller screens and shorter laptop displays.
+- Toolbar actions now wrap instead of overflowing horizontally.
+- Metric cards auto-hide earlier to preserve the lower details, logs, metrics, and history workspace.
+- Server details switch to the compact collapsed strip in constrained layouts.
+- Reduced the minimum supported window size while keeping controls readable.
+
+### 1.0.0 — Initial release
 
 - Added branded application icon and splash screen.
 - Added telemetry Activity charts with consistent inbound/outbound colour semantics.
